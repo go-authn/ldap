@@ -96,15 +96,24 @@ func (p *filterParser) item() (Filter, error) {
 		p.pos++
 	}
 	attr := p.s[start:p.pos]
-	if attr == "" {
-		return nil, fmt.Errorf("ldap: a filter item with no attribute at %q", p.rest())
-	}
 	if p.pos >= len(p.s) {
 		return nil, fmt.Errorf("ldap: the filter ends inside %q", attr)
 	}
 
+	// ⛔ RFC 4515 3 has TWO forms of extensible match, and the second carries
+	// no attribute at all:
+	//
+	//	extensible = ( attr [dnattrs] [matchingrule] COLON EQUALS value )
+	//	           / (      [dnattrs]  matchingrule  COLON EQUALS value )
+	//
+	// `(:caseExactMatch:=alice)` applies the rule to every attribute of the
+	// entry. Requiring an attribute here refused a filter the specification
+	// defines -- found by a round-trip test, not by reading.
 	if p.s[p.pos] == ':' {
 		return p.extensible(attr)
+	}
+	if attr == "" {
+		return nil, fmt.Errorf("ldap: a filter item with no attribute at %q", p.rest())
 	}
 
 	var op string
