@@ -74,8 +74,23 @@ func (d *directory) Search(ctx context.Context, s Session, req *SearchRequest, w
 
 // inScope is the scope rule (RFC 4511 4.5.1.2), which a directory owns
 // rather than the server: only the data knows what is under what.
+//
+// ⛔ An EMPTY base is the root of the DIT, and everything is under it -- so
+// a subtree search from "" is the whole directory, and a single-level one is
+// the entries with exactly one RDN. Written as a suffix test the empty base
+// gives `HasSuffix(dn, ",")`, which matches nothing, and a search of the
+// whole tree comes back empty while looking like a correct answer.
 func inScope(dn, base string, scope Scope) bool {
 	dn, base = strings.ToLower(dn), strings.ToLower(base)
+	if base == "" {
+		switch scope {
+		case ScopeBaseObject:
+			return dn == "" // the root DSE, which the server answers itself
+		case ScopeSingleLevel:
+			return dn != "" && !strings.Contains(dn, ",")
+		}
+		return true // the whole directory
+	}
 	switch scope {
 	case ScopeBaseObject:
 		return dn == base
@@ -96,11 +111,26 @@ func (p *password) Bind(ctx context.Context, s Session, req *BindRequest) (Resul
 	if p.seen != nil {
 		p.seen(req)
 	}
-	// RFC 4513 5.1.2: a name with an EMPTY password is an UNAUTHENTICATED
-	// bind and means "I am anonymous" -- not "I proved this name". A server
-	// that answers it success lets anybody in as anybody.
+	// ⛔ RFC 4513 has TWO empty-password cases and they are one field apart.
+	//
+	//   5.1.1 ANONYMOUS: name "" and password "" -- legitimate. It means "I
+	//         am nobody", it is what every client sends before it discovers
+	//         the server, and it is answered SUCCESS with the association
+	//         left anonymous.
+	//
+	//   5.1.2 UNAUTHENTICATED: a NAME with an empty password -- refused.
+	//         It means "I am nobody" too, but it NAMES somebody, and a
+	//         server that answers it success lets anybody in as anybody,
+	//         with the client unable to tell it from a real success.
+	//
+	// Conflating them goes wrong in both directions: refuse both and every
+	// anonymous client is locked out, including from the root DSE it needs
+	// in order to discover anything; accept both and the directory is open.
 	if len(req.Simple) == 0 {
-		return Refuse(InvalidCredentials, "an unauthenticated bind is not a proof"), nil
+		if req.Name == "" {
+			return Result{Code: Success}, nil
+		}
+		return Refuse(InvalidCredentials, "a name with no password proves nothing"), nil
 	}
 	if strings.EqualFold(req.Name, p.dn) && string(req.Simple) == p.pw {
 		return Result{Code: Success}, nil

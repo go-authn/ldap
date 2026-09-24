@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"crypto/tls"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,9 @@ type client struct {
 	c  net.Conn
 	r  *bufio.Reader
 	id int
+	// values is every attribute value the last search returned, as
+	// "name: value", for asserting what an entry published.
+	values []string
 }
 
 func dial(t *testing.T, r *running) *client {
@@ -338,4 +342,74 @@ func searchOp(t *testing.T, filter string) *ber.Packet {
 	op.AppendChild(fp)
 	op.AppendChild(ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "attributes"))
 	return op
+}
+
+// searchBase sends a base-scope search against any base.
+func (c *client) searchBase(t *testing.T, base, filter string, attrs ...string) ([]string, Result) {
+	t.Helper()
+	f, err := ParseFilter(filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp, err := EncodeFilter(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := ber.Encode(ber.ClassApplication, ber.TypeConstructed, appSearchRequest, nil, "searchRequest")
+	op.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, base, "baseObject"))
+	op.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagEnumerated, int64(ScopeBaseObject), "scope"))
+	op.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagEnumerated, int64(0), "derefAliases"))
+	op.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, int64(0), "sizeLimit"))
+	op.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, int64(0), "timeLimit"))
+	op.AppendChild(ber.NewBoolean(ber.ClassUniversal, ber.TypePrimitive, ber.TagBoolean, false, "typesOnly"))
+	op.AppendChild(fp)
+	sel := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "attributes")
+	for _, a := range attrs {
+		sel.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, a, "selector"))
+	}
+	op.AppendChild(sel)
+	id := c.next()
+	c.write(t, id, op)
+	return c.collectValues(t)
+}
+
+// collectValues reads to the searchResDone, keeping every attribute value it
+// saw so that a test can assert what the root DSE published.
+func (c *client) collectValues(t *testing.T) ([]string, Result) {
+	t.Helper()
+	c.values = nil
+	var dns []string
+	for {
+		p := c.read(t)
+		switch p.Children[1].Tag {
+		case appSearchResEntry:
+			e := p.Children[1]
+			dns = append(dns, string(e.Children[0].Data.Bytes()))
+			for _, a := range e.Children[1].Children {
+				name := string(a.Children[0].Data.Bytes())
+				for _, v := range a.Children[1].Children {
+					c.values = append(c.values, name+": "+string(v.Data.Bytes()))
+				}
+			}
+		case appSearchResDone:
+			return dns, resultOf(t, p)
+		}
+	}
+}
+
+// rootValues reads the whole root DSE and returns it as text.
+func (c *client) rootValues(t *testing.T) string {
+	t.Helper()
+	c.searchBase(t, "", "(objectClass=*)", "+", "*")
+	return strings.Join(c.values, "\n")
+}
+
+// handshake completes the TLS upgrade this client just asked for.
+func (c *client) handshake(t *testing.T) {
+	t.Helper()
+	tc := tls.Client(c.c, &tls.Config{InsecureSkipVerify: true})
+	if err := tc.Handshake(); err != nil {
+		t.Fatalf("the handshake failed: %v", err)
+	}
+	c.upgrade(tc)
 }

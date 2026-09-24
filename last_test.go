@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 
 	ber "github.com/go-asn1-ber/asn1-ber"
@@ -18,8 +19,13 @@ import (
 // about anybody, usually without meaning to. The shape is logged; the values
 // are not.
 func TestTheLogRecordsTheShapeOfAFilterAndNotItsValues(t *testing.T) {
-	var buf bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	// ⛔ A locked buffer, not a bytes.Buffer. The server logs from its own
+	// goroutines -- including a deferred line when the connection ends --
+	// and reading one while it writes is a data race whatever the buffer
+	// holds. It passed locally and CI's race detector caught it, which is
+	// what a race is: a thing that is fine until the timing changes.
+	buf := &lockedBuffer{}
+	log := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	r := serve(t, &Server{Bind: reader(), Search: &directory{}, Log: log})
 	c := dial(t, r)
 	defer c.Close()
@@ -166,4 +172,22 @@ func TestEveryRequestHasAResponseType(t *testing.T) {
 			t.Errorf("request %d answers with %d, want %d", tc.req, got, tc.resp)
 		}
 	}
+}
+
+// lockedBuffer is a buffer a test can read while a server writes it.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }

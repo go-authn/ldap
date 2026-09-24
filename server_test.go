@@ -239,17 +239,30 @@ func TestAnUnimplementedMatchingRuleIsRefused(t *testing.T) {
 	}
 }
 
-// ⛔ RFC 4513 5.1.2: a name with an EMPTY password is an UNAUTHENTICATED
-// bind and means "I am anonymous", not "I proved this name". A server that
-// passes it through as proof lets anybody in as anybody, and the client that
-// asked cannot tell it from a real success.
-func TestAnEmptyPasswordDoesNotProveAName(t *testing.T) {
+// ⛔ RFC 4513 has two empty-password cases, one field apart.
+//
+//   - 5.1.1 ANONYMOUS, name "" and password "": legitimate, and what every
+//     client sends before it has discovered anything.
+//   - 5.1.2 UNAUTHENTICATED, a NAME with an empty password: refused. A
+//     server that passes it through as proof lets anybody in as anybody,
+//     and the client cannot tell it from a real success.
+//
+// Both directions are asserted, because getting it wrong one way locks out
+// every anonymous client -- including from the root DSE it needs in order to
+// discover the server at all -- and the other way opens the directory. The
+// first is how these tests failed: ldapsearch's own anonymous bind was
+// refused, and the root DSE tests reported nothing at all.
+func TestTheTwoEmptyPasswordBinds(t *testing.T) {
 	bin := judge(t)
 	r := serve(t, &Server{Bind: reader(), Search: &directory{entries: people("alice")}})
 
-	out, _ := runBind(t, bin, r, "cn=reader,dc=example,dc=org", "")
-	if !strings.Contains(out, "Invalid credentials") {
-		t.Errorf("an empty password was not refused:\n%s", out)
+	named, _ := runBind(t, bin, r, "cn=reader,dc=example,dc=org", "")
+	if !strings.Contains(named, "Invalid credentials") {
+		t.Errorf("a NAME with an empty password was not refused:\n%s", named)
+	}
+	anonymous, _ := runBind(t, bin, r, "", "")
+	if strings.Contains(anonymous, "Invalid credentials") {
+		t.Errorf("an anonymous bind was refused:\n%s", anonymous)
 	}
 }
 

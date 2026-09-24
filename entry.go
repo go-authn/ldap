@@ -16,6 +16,26 @@ import "strings"
 type Attribute struct {
 	Name   string
 	Values [][]byte
+
+	// Operational marks an attribute the directory maintains rather than a
+	// person (RFC 4512 4.1.3): createTimestamp, entryUUID, and everything on
+	// the root DSE.
+	//
+	// ⛔ It changes what a search RETURNS, which is why it is on the model
+	// and not a detail of one server. RFC 4512 5.1: operational attributes
+	// "are not returned in search requests unless requested by name" -- so
+	// `*` (or an empty selection) brings the user attributes only, and `+`
+	// (RFC 3673) brings these. A server that cannot tell them apart either
+	// hides an attribute a client asked for or hands out one it did not.
+	Operational bool
+}
+
+// OperationalAttribute is StringAttribute for an attribute the directory
+// maintains.
+func OperationalAttribute(name string, values ...string) *Attribute {
+	a := StringAttribute(name, values...)
+	a.Operational = true
+	return a
 }
 
 // StringAttribute is the common case spelled once, since most attributes ARE

@@ -52,14 +52,16 @@ func (c *conn) operation(ctx context.Context, m *message, log *slog.Logger) {
 		return
 	}
 
-	// ⛔ Confidentiality first, before anything reads the request. A bind
-	// password refused for the transport must not first be compared against
-	// anything, and a search refused for the transport must not first be
-	// answered.
-	if c.srv.RequireTLS && !c.encrypted() {
-		c.send(resultMessage(m.id, resp, Refuse(ConfidentialityRequired,
-			"this listener requires TLS, and nothing asked for it")))
-		return
+	// A search is decoded here, once, because whether it is the root DSE
+	// read decides what the rules below are.
+	var search *SearchRequest
+	if m.op.Tag == appSearchRequest {
+		req, err := decodeSearchRequest(m.op)
+		if err != nil {
+			c.send(resultMessage(m.id, resp, Refuse(ProtocolError, "%v", err)))
+			return
+		}
+		search = req
 	}
 
 	// ⛔ A critical control nobody here handles means the operation MUST be
@@ -72,11 +74,33 @@ func (c *conn) operation(ctx context.Context, m *message, log *slog.Logger) {
 		return
 	}
 
+	// ⛔ The root DSE is read BEFORE the confidentiality gate, and that is
+	// deliberate rather than an oversight. It is where StartTLS is
+	// advertised (RFC 4512 5.1), so a listener that demanded TLS to read it
+	// would hide the only extension that offers TLS -- a client would have
+	// to already know the answer to discover it. What it exposes is this
+	// server's capabilities, which is what discovery IS; it publishes
+	// nobody's data.
+	if search != nil && isRootDSERead(search) {
+		c.searchRootDSE(ctx, m, search)
+		return
+	}
+
+	// ⛔ Confidentiality next, before anything reads the request further. A
+	// bind password refused for the transport must not first be compared
+	// against anything, and a search refused for the transport must not
+	// first be answered.
+	if c.srv.RequireTLS && !c.encrypted() {
+		c.send(resultMessage(m.id, resp, Refuse(ConfidentialityRequired,
+			"this listener requires TLS, and nothing asked for it")))
+		return
+	}
+
 	switch m.op.Tag {
 	case appBindRequest:
 		c.bind(ctx, m, log)
 	case appSearchRequest:
-		c.search(ctx, m, log)
+		c.search(ctx, m, search, log)
 	case appCompareRequest:
 		c.compare(ctx, m)
 	case appAddRequest:

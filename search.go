@@ -21,10 +21,9 @@ type entryWriter struct {
 	typesOnly bool
 	limit     int // 0 means no limit
 	sent      atomic.Int64
-	// attributes is the selection, already resolved. Nil means "everything
-	// the handler gave us".
-	attributes []string
-	ctx        context.Context
+	// selection is what the client asked to be sent back, already resolved.
+	selection selector
+	ctx       context.Context
 }
 
 func (w *entryWriter) Entry(e *Entry) error {
@@ -54,56 +53,93 @@ func (w *entryWriter) Reference(uris ...string) error {
 	return nil
 }
 
-// project keeps only the attributes the client selected.
+// A selector is what a client asked to be sent back.
 //
-// ⛔ It is done HERE rather than left to each handler, because a handler that
-// forgets returns MORE than the client asked for -- and "more" out of a
-// directory is the attribute somebody deliberately did not request. The
-// selection rules are RFC 4511 4.5.1.8: an empty list means all USER
-// attributes, "*" means the same, "1.1" means none at all.
-func (w *entryWriter) project(e *Entry) *Entry {
-	if w.attributes == nil {
-		return e
+// ⛔ It is resolved HERE and applied HERE rather than left to each handler,
+// because a handler that forgets returns MORE than the client asked for --
+// and "more" out of a directory is the attribute somebody deliberately did
+// not request.
+type selector struct {
+	// user is true when "*" or an empty list asked for the user attributes.
+	user bool
+	// operational is true when "+" asked for the ones the directory keeps
+	// (RFC 3673).
+	operational bool
+	// named is the attributes asked for by name, which are sent whether they
+	// are operational or not -- that is what "unless requested by name"
+	// means.
+	named []string
+}
+
+// selection resolves the attribute list (RFC 4511 4.5.1.8, RFC 3673).
+//
+//   - an empty list, or "*", is all USER attributes
+//   - "+" is all OPERATIONAL attributes
+//   - "1.1" is none at all, and is an OID that cannot name one
+//   - anything else is a name, and a named attribute is sent even when it is
+//     operational
+func selection(req *SearchRequest) selector {
+	if len(req.Attributes) == 0 {
+		return selector{user: true}
 	}
+	var s selector
+	for _, a := range req.Attributes {
+		switch a {
+		case "*":
+			s.user = true
+		case "+":
+			s.operational = true
+		case "1.1":
+			// Nothing at all. It is listed alone by every client that means
+			// it, and a client that sends it alongside a name has asked two
+			// contradictory things -- the name wins, because it is the
+			// specific one.
+		default:
+			s.named = append(s.named, a)
+		}
+	}
+	return s
+}
+
+// wants reports whether an attribute was selected.
+func (s selector) wants(a *Attribute) bool {
+	for _, want := range s.named {
+		if strings.EqualFold(a.Name, want) || strings.EqualFold(baseName(a.Name), want) {
+			return true
+		}
+	}
+	if a.Operational {
+		return s.operational
+	}
+	return s.user
+}
+
+// project keeps only the attributes the client selected.
+func (w *entryWriter) project(e *Entry) *Entry {
 	out := &Entry{DN: e.DN}
 	for _, a := range e.Attributes {
-		for _, want := range w.attributes {
-			if strings.EqualFold(a.Name, want) || strings.EqualFold(baseName(a.Name), want) {
-				out.Attributes = append(out.Attributes, a)
-				break
-			}
+		if w.selection.wants(a) {
+			out.Attributes = append(out.Attributes, a)
 		}
 	}
 	return out
 }
 
-// selection resolves the attribute list into either nil (send everything) or
-// the names to keep.
-func selection(req *SearchRequest) []string {
-	if len(req.Attributes) == 0 {
-		return nil // all user attributes
-	}
-	for _, a := range req.Attributes {
-		switch a {
-		case "*":
-			return nil
-		case "1.1":
-			// RFC 4511 4.5.1.8: "1.1" means no attributes at all, and it is
-			// an OID that cannot name one. An empty non-nil slice says
-			// "keep nothing", which nil would not.
-			return []string{}
+// searchRootDSE answers this server's own entry (RFC 4512 5.1).
+func (c *conn) searchRootDSE(ctx context.Context, m *message, req *SearchRequest) {
+	w := &entryWriter{c: c, id: m.id, ctx: ctx, typesOnly: req.TypesOnly, selection: selection(req)}
+	// The filter still applies: a client asking for (objectClass=nothing)
+	// against the root DSE has asked a question with no answer, and giving
+	// it one anyway would make the filter decorative.
+	if req.Filter.Matches(c.rootDSE()) {
+		if err := w.Entry(c.rootDSE()); err != nil {
+			return
 		}
 	}
-	return req.Attributes
+	c.send(resultMessage(m.id, appSearchResDone, Result{Code: Success}))
 }
 
-func (c *conn) search(ctx context.Context, m *message, log *slog.Logger) {
-	req, err := decodeSearchRequest(m.op)
-	if err != nil {
-		c.send(resultMessage(m.id, appSearchResDone, Refuse(ProtocolError, "%v", err)))
-		return
-	}
-
+func (c *conn) search(ctx context.Context, m *message, req *SearchRequest, log *slog.Logger) {
 	// ⛔ A filter asking for something this server cannot do is refused with
 	// inappropriateMatching, NOT answered with the entries that happen to
 	// match the rest. RFC 4511 4.5.1.7.7 says so, and the reason is that
@@ -130,9 +166,9 @@ func (c *conn) search(ctx context.Context, m *message, log *slog.Logger) {
 
 	w := &entryWriter{
 		c: c, id: m.id, ctx: ctx,
-		typesOnly:  req.TypesOnly,
-		limit:      effectiveLimit(req.SizeLimit, c.srv.MaxEntries),
-		attributes: selection(req),
+		typesOnly: req.TypesOnly,
+		limit:     effectiveLimit(req.SizeLimit, c.srv.MaxEntries),
+		selection: selection(req),
 	}
 	r, err := c.srv.Search.Search(ctx, c, req, w)
 	switch {

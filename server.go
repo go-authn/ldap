@@ -70,6 +70,15 @@ type Server struct {
 	// never.
 	IdleTimeout time.Duration
 
+	// NamingContexts is what this server holds, published on the root DSE so
+	// that a client can find out where to search (RFC 4512 5.1.2).
+	NamingContexts []string
+	// AltServers are other servers to try when this one is unavailable.
+	AltServers []string
+	// Vendor and VendorVersion identify the implementation (RFC 3045).
+	Vendor        string
+	VendorVersion string
+
 	// Log receives what happened. Nil discards it.
 	//
 	// ⛔ Nothing here logs an assertion VALUE. A search filter carries what
