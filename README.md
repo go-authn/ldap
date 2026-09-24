@@ -1,7 +1,19 @@
 # go-authn/ldap
 
-An LDAP **server** in Go, written from RFC 4511, 4513, 4515 and 7628. No cgo,
-no client, no global state.
+**A library, not a daemon.** It is the LDAP protocol half —
+the wire, the filter, the operations — that
+[go-authn/authnd](https://github.com/go-authn/authnd) runs. authnd stays the
+server: it owns the configuration, the directory sources, the bind policy and
+the MFA. This owns the bytes.
+
+The same split as `go-filesystems/nfs` under `go-fileshare/fileshare`, and
+`go-authn/kdc` under `authnd`. There is no second server here, and authnd
+never had an LDAP implementation of its own to merge — it had **zero** lines
+of wire code and rented the protocol from a fork of `glauth/ldap`. This
+replaces the rental.
+
+Written from RFC 4511, 4513, 4515 and 7628. No cgo, no client, no global
+state.
 
 It exists because [go-authn/authnd](https://github.com/go-authn/authnd) was
 built on a fork of `glauth/ldap`, and six defects turned up in the parts of it
@@ -47,9 +59,11 @@ unauthenticated packet must not take the directory down.
 
 ## Status
 
-Being written. The wire layer, the filter and the operation types are done and
-carry 100% coverage; the connection loop, the SASL exchange and the root DSE
-are next.
+The server answers binds (simple and SASL), searches, compares, extended
+operations, StartTLS, abandon and all four writes, at 100% coverage.
+
+Still to come: the root DSE, the paged-results control (RFC 2696), and the
+read controls (RFC 4527) that let a client see what its write actually did.
 
 OpenLDAP's own `ldapsearch` is the judge in CI. A server tested only by a
 client from this same module can agree with it about a misreading of the
