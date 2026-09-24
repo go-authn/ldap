@@ -59,7 +59,7 @@ func (d *directory) Search(ctx context.Context, s Session, req *SearchRequest, w
 		return *d.refuse, nil
 	}
 	for _, e := range d.entries {
-		if !inScope(e.DN, req.BaseObject, req.Scope) {
+		if !InScope(e.DN, req.BaseObject, req.Scope) {
 			continue
 		}
 		if !req.Filter.Matches(e) {
@@ -70,35 +70,6 @@ func (d *directory) Search(ctx context.Context, s Session, req *SearchRequest, w
 		}
 	}
 	return Result{Code: Success}, nil
-}
-
-// inScope is the scope rule (RFC 4511 4.5.1.2), which a directory owns
-// rather than the server: only the data knows what is under what.
-//
-// ⛔ An EMPTY base is the root of the DIT, and everything is under it -- so
-// a subtree search from "" is the whole directory, and a single-level one is
-// the entries with exactly one RDN. Written as a suffix test the empty base
-// gives `HasSuffix(dn, ",")`, which matches nothing, and a search of the
-// whole tree comes back empty while looking like a correct answer.
-func inScope(dn, base string, scope Scope) bool {
-	dn, base = strings.ToLower(dn), strings.ToLower(base)
-	if base == "" {
-		switch scope {
-		case ScopeBaseObject:
-			return dn == "" // the root DSE, which the server answers itself
-		case ScopeSingleLevel:
-			return dn != "" && !strings.Contains(dn, ",")
-		}
-		return true // the whole directory
-	}
-	switch scope {
-	case ScopeBaseObject:
-		return dn == base
-	case ScopeSingleLevel:
-		rest, ok := strings.CutSuffix(dn, ","+base)
-		return ok && !strings.Contains(rest, ",")
-	}
-	return dn == base || strings.HasSuffix(dn, ","+base)
 }
 
 // password is a Binder that knows one person.
