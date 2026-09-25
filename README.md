@@ -12,8 +12,38 @@ never had an LDAP implementation of its own to merge — it had **zero** lines
 of wire code and rented the protocol from a fork of `glauth/ldap`. This
 replaces the rental.
 
-Written from RFC 4511, 4513, 4515 and 7628. No cgo, no client, no global
-state.
+Written from RFC 4511 (the protocol), 4512 (the root DSE), 4513
+(authentication), 4514 (DN string form), 4515 (filter string form),
+4526 (absolute true and false filters), 2696 (paged
+results), 3673 (`+`, all operational attributes), 4527 (the read entry
+controls), 4532 (whoami) and 3045 (vendor attributes).
+
+SASL binds are carried but not *understood*: RFC 4511 4.2 says a bind names a
+mechanism and carries an octet string of that mechanism's own shape, so
+`SASLBinder` hands both to the consumer and this package never learns which
+mechanism it got. OAUTHBEARER (RFC 7628) is therefore **not** implemented
+here — it lives in [authnd](https://github.com/go-authn/authnd), which is the
+only place that can check a token. An earlier version of this file listed
+7628 among the RFCs this package was written from, which was wrong.
+
+There is **no schema**, so every comparison is case-insensitive on the value:
+an attribute's matching rule decides that, and RFC 4517 has `caseExactMatch`
+too, but without a schema there is no way to know which rule applies. For
+reading that is the safer of the two — it never hides an entry an exact
+comparison would have found.
+
+Three more RFCs are *named* and deliberately **not** honoured: ManageDsaIT
+(RFC 3296), password modify (RFC 3062) and cancel (RFC 3909). They are
+constants because a client may send them, not because this answers them —
+nothing here follows aliases or referrals, so a critical ManageDsaIT is
+refused, which is the correct answer rather than a missing one.
+
+The difference is not a footnote: the root DSE publishes exactly what this
+server honours, under `supportedControl`, `supportedFeatures`,
+`supportedExtension` and `supportedSASLMechanisms`. Advertising a control
+nothing honours sends a client down a path that silently does the wrong
+thing; honouring one never advertised means a client that discovers
+capabilities properly will never ask. No cgo, no client, no global state.
 
 It exists because [go-authn/authnd](https://github.com/go-authn/authnd) was
 built on a fork of `glauth/ldap`, and six defects turned up in the parts of it

@@ -70,7 +70,7 @@ func (c *conn) operation(ctx context.Context, m *message, log *slog.Logger) {
 	// anyway does something else and reports success.
 	// The controls this server honours. A critical one NOT in this list
 	// refuses the operation, which is the whole point of criticality.
-	if ctl := UnhandledCritical(m.controls, OIDPaging, OIDPreRead, OIDPostRead); ctl != nil {
+	if ctl := UnhandledCritical(m.controls, supportedControls...); ctl != nil {
 		c.send(resultMessage(m.id, resp, Refuse(UnavailableCriticalExtension,
 			"the control %s is marked critical and nothing here handles it", ctl.Type)))
 		return

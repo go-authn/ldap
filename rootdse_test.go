@@ -6,6 +6,7 @@ import (
 	"context"
 	"net"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -242,5 +243,60 @@ func TestARootDSEReadThatCannotSendSendsNothingAtAll(t *testing.T) {
 	// finished.
 	if c.isClosed() {
 		t.Log("the connection closed, which is also a way of not lying")
+	}
+}
+
+// ⛔ The root DSE advertised neither supportedControl nor supportedFeatures
+// while the server honoured three controls and implemented both features.
+// For controls that is not a gap but a false statement: RFC 4512 5.1.3 says
+// "if the server does not support any request controls, this attribute will
+// be absent", so an absent attribute says there are none. Paged results
+// shipped and no client reading the root DSE could find it.
+//
+// This test does NOT compare the advertisement against another list -- two
+// lists agree until somebody edits one. It compares it against the SERVER'S
+// BEHAVIOUR: everything advertised must survive being sent critically, and a
+// control that is not advertised must be refused when it is.
+func TestEveryAdvertisedControlIsOneTheServerHonours(t *testing.T) {
+	r := serve(t, &Server{Bind: reader(), Search: &directory{entries: people("alice")}})
+	c := dial(t, r)
+	defer c.Close()
+	c.bind(t, "cn=reader,dc=example,dc=org", "let me read")
+
+	advertised := SupportedControls()
+	if len(advertised) == 0 {
+		t.Fatal("no controls advertised")
+	}
+	for _, oid := range advertised {
+		// Critical, and the operation must NOT be refused for it.
+		_, res := c.searchWith(t, "(uid=*)", &Control{Type: oid, Criticality: true})
+		if res.Code == UnavailableCriticalExtension {
+			t.Errorf("the root DSE advertises %s but a critical one is refused", oid)
+		}
+	}
+
+	// The converse: a control this server does not advertise is refused when
+	// critical. ManageDsaIT is named as a constant precisely because a client
+	// may send it, and nothing here follows aliases or referrals.
+	if slices.Contains(advertised, OIDManageDsaIT) {
+		t.Fatal("ManageDsaIT is advertised, but nothing here honours it")
+	}
+	if _, res := c.searchWith(t, "(uid=*)", &Control{Type: OIDManageDsaIT, Criticality: true}); res.Code != UnavailableCriticalExtension {
+		t.Errorf("an unadvertised critical control answered %s", res.Code)
+	}
+}
+
+// And OpenLDAP's own client must be able to read both attributes back, since
+// a client discovering capabilities is the entire reason they exist.
+func TestTheJudgeReadsTheControlsAndFeatures(t *testing.T) {
+	bin := judge(t)
+	r := rootServer(t, &Server{Bind: reader()})
+
+	got := readRoot(t, bin, r, "supportedControl", "supportedFeatures")
+	for _, oid := range append(SupportedControls(),
+		FeatureAllOperationalAttributes, FeatureAbsoluteFilters) {
+		if !strings.Contains(got, oid) {
+			t.Errorf("ldapsearch did not see %s in the root DSE:\n%s", oid, got)
+		}
 	}
 }
