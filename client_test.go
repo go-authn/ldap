@@ -465,3 +465,75 @@ func (c *client) pagesOpen(t *testing.T, s *Server) int {
 	}
 	return 0
 }
+
+// The write helpers that carry controls, for the read entry controls.
+
+func (c *client) withControls(t *testing.T, op *ber.Packet, controls ...*Control) ResultCode {
+	t.Helper()
+	m := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "LDAPMessage")
+	m.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, int64(c.next()), "messageID"))
+	m.AppendChild(op)
+	list := ber.Encode(ber.ClassContext, ber.TypeConstructed, tagControls, nil, "controls")
+	for _, ctl := range controls {
+		one := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "control")
+		one.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, ctl.Type, "controlType"))
+		if ctl.Criticality {
+			one.AppendChild(ber.NewBoolean(ber.ClassUniversal, ber.TypePrimitive, ber.TagBoolean, true, "criticality"))
+		}
+		if ctl.Value != nil {
+			one.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, string(ctl.Value), "controlValue"))
+		}
+		list.AppendChild(one)
+	}
+	m.AppendChild(list)
+	if _, err := c.c.Write(m.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	p := c.read(t)
+	c.lastControls = controlsOf(p)
+	return resultOf(t, p).Code
+}
+
+func (c *client) modifyWith(t *testing.T, dn string, changes []Change, controls ...*Control) ResultCode {
+	t.Helper()
+	op := ber.Encode(ber.ClassApplication, ber.TypeConstructed, appModifyRequest, nil, "modifyRequest")
+	op.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, dn, "object"))
+	list := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "changes")
+	for _, ch := range changes {
+		one := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "change")
+		one.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagEnumerated, int64(ch.Operation), "operation"))
+		one.AppendChild(encodeAttribute(ch.Attribute))
+		list.AppendChild(one)
+	}
+	op.AppendChild(list)
+	return c.withControls(t, op, controls...)
+}
+
+func (c *client) addWith(t *testing.T, dn string, attrs []*Attribute, controls ...*Control) ResultCode {
+	t.Helper()
+	op := ber.Encode(ber.ClassApplication, ber.TypeConstructed, appAddRequest, nil, "addRequest")
+	op.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, dn, "entry"))
+	list := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "attributes")
+	for _, a := range attrs {
+		list.AppendChild(encodeAttribute(a))
+	}
+	op.AppendChild(list)
+	return c.withControls(t, op, controls...)
+}
+
+func (c *client) deleteWith(t *testing.T, dn string, controls ...*Control) ResultCode {
+	t.Helper()
+	return c.withControls(t, ber.NewString(ber.ClassApplication, ber.TypePrimitive, appDelRequest, dn, "delRequest"), controls...)
+}
+
+func (c *client) modifyDNWith(t *testing.T, dn, newRDN string, deleteOld bool, newSuperior string, controls ...*Control) ResultCode {
+	t.Helper()
+	op := ber.Encode(ber.ClassApplication, ber.TypeConstructed, appModDNRequest, nil, "modDNRequest")
+	op.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, dn, "entry"))
+	op.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, newRDN, "newrdn"))
+	op.AppendChild(ber.NewBoolean(ber.ClassUniversal, ber.TypePrimitive, ber.TagBoolean, deleteOld, "deleteoldrdn"))
+	if newSuperior != "" {
+		op.AppendChild(ber.NewString(ber.ClassContext, ber.TypePrimitive, 0, newSuperior, "newSuperior"))
+	}
+	return c.withControls(t, op, controls...)
+}

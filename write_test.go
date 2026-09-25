@@ -22,28 +22,39 @@ type writes struct {
 	compare  *CompareRequest
 	result   Result
 	err      error
+	// pre and post are what this handler reports for the read entry
+	// controls, when a test sets them.
+	pre, post *Entry
 }
 
-func (w *writes) Add(_ context.Context, _ Session, r *AddRequest) (Result, error) {
+func (w *writes) Add(_ context.Context, _ Session, r *AddRequest) (WriteResult, error) {
 	w.add = r
-	return w.answer()
+	return w.wrote()
 }
-func (w *writes) Modify(_ context.Context, _ Session, r *ModifyRequest) (Result, error) {
+func (w *writes) Modify(_ context.Context, _ Session, r *ModifyRequest) (WriteResult, error) {
 	w.modify = r
-	return w.answer()
+	return w.wrote()
 }
-func (w *writes) Delete(_ context.Context, _ Session, r *DeleteRequest) (Result, error) {
+func (w *writes) Delete(_ context.Context, _ Session, r *DeleteRequest) (WriteResult, error) {
 	w.del = r
-	return w.answer()
+	return w.wrote()
 }
-func (w *writes) ModifyDN(_ context.Context, _ Session, r *ModifyDNRequest) (Result, error) {
+func (w *writes) ModifyDN(_ context.Context, _ Session, r *ModifyDNRequest) (WriteResult, error) {
 	w.modifyDN = r
-	return w.answer()
+	return w.wrote()
 }
 func (w *writes) Compare(_ context.Context, _ Session, r *CompareRequest) (Result, error) {
 	w.compare = r
 	return w.answer()
 }
+
+// wrote is answer(), plus whatever entries the test asked it to report for
+// the read entry controls.
+func (w *writes) wrote() (WriteResult, error) {
+	r, err := w.answer()
+	return WriteResult{Result: r, PreRead: w.pre, PostRead: w.post}, err
+}
+
 func (w *writes) answer() (Result, error) {
 	if w.err != nil {
 		return Result{}, w.err

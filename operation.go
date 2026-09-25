@@ -70,7 +70,7 @@ func (c *conn) operation(ctx context.Context, m *message, log *slog.Logger) {
 	// anyway does something else and reports success.
 	// The controls this server honours. A critical one NOT in this list
 	// refuses the operation, which is the whole point of criticality.
-	if ctl := UnhandledCritical(m.controls, OIDPaging); ctl != nil {
+	if ctl := UnhandledCritical(m.controls, OIDPaging, OIDPreRead, OIDPostRead); ctl != nil {
 		c.send(resultMessage(m.id, resp, Refuse(UnavailableCriticalExtension,
 			"the control %s is marked critical and nothing here handles it", ctl.Type)))
 		return
@@ -146,6 +146,57 @@ func (c *conn) answer(id int, resp ber.Tag, r Result, err error, log *slog.Logge
 	c.send(resultMessage(id, resp, r))
 }
 
+// answerWrite sends a write's result, with RFC 4527's response controls when
+// the client asked and the handler could answer.
+//
+// ⛔ Only on SUCCESS. RFC 4527 3.1: "If the update operation fails (in either
+// normal or control processing), no Pre-Read response control is provided."
+// A control attached to a failure would describe an entry the operation did
+// not produce.
+func (c *conn) answerWrite(id int, resp ber.Tag, req readAsking, r WriteResult, err error, log *slog.Logger, op string) {
+	if err != nil {
+		log.Error("the handler failed", "op", op, "err", err)
+		c.send(resultMessage(id, resp, Result{Code: Other}))
+		return
+	}
+	if r.Code != Success {
+		c.send(resultMessage(id, resp, r.Result))
+		return
+	}
+	var controls []Control
+	if sel, e := req.preRead(), r.PreRead; sel != nil && e != nil {
+		controls = append(controls, encodeReadEntry(OIDPreRead, sel.Keep(e)))
+	}
+	if sel, e := req.postRead(), r.PostRead; sel != nil && e != nil {
+		controls = append(controls, encodeReadEntry(OIDPostRead, sel.Keep(e)))
+	}
+	c.sendWithControls(resultMessage(id, resp, r.Result), controls...)
+}
+
+// readAsking is the part of a write request that says what the client asked
+// to see. Four request types carry it, and answerWrite needs only this.
+type readAsking interface {
+	preRead() *ReadSelection
+	postRead() *ReadSelection
+}
+
+// attachRead decodes the read entry controls onto a request, or refuses.
+// It returns false when it has already answered.
+func (c *conn) attachRead(m *message, resp ber.Tag, set func(pre, post *ReadSelection)) bool {
+	pre, post, refuse, err := readControls(m.controls, m.op.Tag)
+	if err != nil {
+		c.send(resultMessage(m.id, resp, Refuse(ProtocolError, "%v", err)))
+		return false
+	}
+	if refuse != nil {
+		c.send(resultMessage(m.id, resp, Refuse(UnavailableCriticalExtension,
+			"the control %s is critical and means nothing on this operation", refuse.Type)))
+		return false
+	}
+	set(pre, post)
+	return true
+}
+
 func (c *conn) compare(ctx context.Context, m *message) {
 	if c.srv.Compare == nil {
 		c.send(resultMessage(m.id, appCompareResponse, Refuse(UnwillingToPerform,
@@ -172,8 +223,11 @@ func (c *conn) add(ctx context.Context, m *message) {
 		c.send(resultMessage(m.id, appAddResponse, Refuse(ProtocolError, "%v", err)))
 		return
 	}
+	if !c.attachRead(m, appAddResponse, func(pre, post *ReadSelection) { req.PreRead, req.PostRead = pre, post }) {
+		return
+	}
 	r, err := c.srv.Add.Add(ctx, c, req)
-	c.answer(m.id, appAddResponse, r, err, c.srv.logger(), "add")
+	c.answerWrite(m.id, appAddResponse, req, r, err, c.srv.logger(), "add")
 }
 
 func (c *conn) modify(ctx context.Context, m *message) {
@@ -187,8 +241,11 @@ func (c *conn) modify(ctx context.Context, m *message) {
 		c.send(resultMessage(m.id, appModifyResponse, Refuse(ProtocolError, "%v", err)))
 		return
 	}
+	if !c.attachRead(m, appModifyResponse, func(pre, post *ReadSelection) { req.PreRead, req.PostRead = pre, post }) {
+		return
+	}
 	r, err := c.srv.Modify.Modify(ctx, c, req)
-	c.answer(m.id, appModifyResponse, r, err, c.srv.logger(), "modify")
+	c.answerWrite(m.id, appModifyResponse, req, r, err, c.srv.logger(), "modify")
 }
 
 func (c *conn) del(ctx context.Context, m *message) {
@@ -200,8 +257,11 @@ func (c *conn) del(ctx context.Context, m *message) {
 	// A DelRequest is [APPLICATION 10] LDAPDN -- the octets ARE the DN, with
 	// no SEQUENCE around them.
 	req := &DeleteRequest{DN: string(m.op.Data.Bytes())}
+	if !c.attachRead(m, appDelResponse, func(pre, post *ReadSelection) { req.PreRead, req.PostRead = pre, post }) {
+		return
+	}
 	r, err := c.srv.Delete.Delete(ctx, c, req)
-	c.answer(m.id, appDelResponse, r, err, c.srv.logger(), "delete")
+	c.answerWrite(m.id, appDelResponse, req, r, err, c.srv.logger(), "delete")
 }
 
 func (c *conn) modifyDN(ctx context.Context, m *message) {
@@ -215,6 +275,9 @@ func (c *conn) modifyDN(ctx context.Context, m *message) {
 		c.send(resultMessage(m.id, appModDNResponse, Refuse(ProtocolError, "%v", err)))
 		return
 	}
+	if !c.attachRead(m, appModDNResponse, func(pre, post *ReadSelection) { req.PreRead, req.PostRead = pre, post }) {
+		return
+	}
 	r, err := c.srv.ModifyDN.ModifyDN(ctx, c, req)
-	c.answer(m.id, appModDNResponse, r, err, c.srv.logger(), "modifydn")
+	c.answerWrite(m.id, appModDNResponse, req, r, err, c.srv.logger(), "modifydn")
 }
