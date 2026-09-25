@@ -60,15 +60,37 @@ unauthenticated packet must not take the directory down.
 ## Status
 
 The server answers binds (simple and SASL), searches, compares, extended
-operations, StartTLS, abandon and all four writes, at 100% coverage.
+operations, StartTLS, abandon, the **root DSE** and all four writes.
 
-Still to come: the root DSE, the paged-results control (RFC 2696), and the
-read controls (RFC 4527) that let a client see what its write actually did.
+Coverage is **99.9%**, and the missing line is named rather than rounded
+away: the `EncodeFilter` error branch in `ldaptest`'s `Search` cannot run,
+because `Filter` is a sealed interface and `EncodeFilter` is total over the
+nine types that satisfy it. The branch is kept — it is what reports the day
+that stops being true — and the CI floor is 99.9% with the reason in the
+lane. The floor is raised, never lowered.
 
-OpenLDAP's own `ldapsearch` is the judge in CI. A server tested only by a
-client from this same module can agree with it about a misreading of the
-protocol and both be wrong — which is exactly how the substring bug went
-unnoticed.
+Still to come: the paged-results control (RFC 2696), and the read controls
+(RFC 4527) that let a client see what its write actually did.
+
+⛔ This section said "at 100% coverage" and "still to come: the root DSE"
+for about six hours, both written here by the same hands that then made them
+false. A status line is a claim with an expiry date, and the ones in this
+fleet have cost real work — a README that advertised a repository that did
+not exist, a comment that invented an API nobody had written. It is checked
+against the code when the code moves, not when somebody notices.
+
+## The judge
+
+OpenLDAP's own `ldapsearch` is the judge in CI, in **every** lane that runs
+tests. A server tested only by a client from this same module can agree with
+it about a misreading of the protocol and both be wrong — which is exactly
+how the substring bug went unnoticed.
+
+`ldaptest` is the wire client in this module, and it is deliberately **not**
+the judge: it is for the questions `ldapsearch` cannot ask, all about one
+connection's state — two binds on a single socket, a SASL bind with an
+arbitrary mechanism, and the difference between an absent `serverSaslCreds`
+and an empty one.
 
 ## Licence
 
