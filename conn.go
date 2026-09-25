@@ -30,20 +30,38 @@ type conn struct {
 
 	wmu sync.Mutex // serialises writes; every response goes through send
 
+	// pages is this connection's outstanding paged searches. Per connection
+	// on purpose: a cookie honoured on another one would let anybody resume
+	// somebody else's search, reading at their access level.
+	pages pages
+
 	mu       sync.Mutex
 	boundDN  string
 	controls []Control
 	inflight map[int]context.CancelFunc
-	closed   bool
+	closed   chan struct{}
+	isShut   bool
 }
 
-func (s *Server) serve(nc net.Conn) {
-	c := &conn{
+// newConn is the only way to build one.
+//
+// ⛔ A conn carries a channel that close() closes, so a literal with the
+// field left nil panics the moment the connection ends. That is a constructor
+// the type needed as soon as it grew state with a zero value that is not
+// usable -- and it grew one the day paged searches arrived, because a paged
+// search parked on its next entry has to be woken when the client goes away.
+func newConn(s *Server, nc net.Conn) *conn {
+	return &conn{
 		srv:      s,
 		raw:      nc,
 		r:        bufio.NewReader(nc),
 		inflight: map[int]context.CancelFunc{},
+		closed:   make(chan struct{}),
 	}
+}
+
+func (s *Server) serve(nc net.Conn) {
+	c := newConn(s, nc)
 	if !s.add(c) {
 		nc.Close()
 		return
@@ -216,6 +234,11 @@ func (c *conn) send(p *ber.Packet) {
 	}
 }
 
+// sendWithControls writes one response carrying response controls.
+func (c *conn) sendWithControls(p *ber.Packet, controls ...Control) {
+	c.send(appendControls(p, controls...))
+}
+
 // notice is an unsolicited notification of disconnection (RFC 4511 4.4.1):
 // an extended response with message id ZERO, which is the only message a
 // server sends on its own.
@@ -229,11 +252,16 @@ func (c *conn) notice(code ResultCode, why string) {
 	c.send(m)
 }
 
+// closedCh is closed when this connection ends, so a paged search parked on
+// its next entry stops rather than outliving the client.
+func (c *conn) closedCh() <-chan struct{} { return c.closed }
+
 func (c *conn) close() {
+	c.pages.closeAll()
 	c.mu.Lock()
-	already := c.closed
+	already := c.isShut
 	raw := c.raw
-	c.closed = true
+	c.isShut = true
 	cancels := make([]context.CancelFunc, 0, len(c.inflight))
 	for _, cancel := range c.inflight {
 		cancels = append(cancels, cancel)
@@ -243,6 +271,7 @@ func (c *conn) close() {
 		cancel()
 	}
 	if !already {
+		close(c.closed)
 		raw.Close()
 	}
 }
@@ -250,7 +279,7 @@ func (c *conn) close() {
 func (c *conn) isClosed() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.closed
+	return c.isShut
 }
 
 // --- Session --------------------------------------------------------------

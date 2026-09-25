@@ -230,3 +230,27 @@ func extendedResponse(id int, r ExtendedResult) *ber.Packet {
 	m.AppendChild(op)
 	return m
 }
+
+// appendControls attaches response controls to a message (RFC 4511 4.1.11).
+//
+// They go on the LDAPMessage, not on the operation: a control is about the
+// message, and a client looking for the paged-results cookie reads it there.
+func appendControls(m *ber.Packet, controls ...Control) *ber.Packet {
+	if len(controls) == 0 {
+		return m
+	}
+	list := ber.Encode(ber.ClassContext, ber.TypeConstructed, tagControls, nil, "controls")
+	for _, c := range controls {
+		one := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "control")
+		one.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, c.Type, "controlType"))
+		if c.Criticality {
+			one.AppendChild(ber.NewBoolean(ber.ClassUniversal, ber.TypePrimitive, ber.TagBoolean, true, "criticality"))
+		}
+		if c.Value != nil {
+			one.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, string(c.Value), "controlValue"))
+		}
+		list.AppendChild(one)
+	}
+	m.AppendChild(list)
+	return m
+}

@@ -225,7 +225,7 @@ func TestARootDSEReadThatCannotSendSendsNothingAtAll(t *testing.T) {
 	left, right := net.Pipe()
 	right.Close() // the far end is gone before anything is written
 	s := &Server{NamingContexts: []string{"dc=example,dc=org"}}
-	c := &conn{srv: s, raw: left, inflight: map[int]context.CancelFunc{}}
+	c := newConn(s, left)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

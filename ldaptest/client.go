@@ -233,6 +233,30 @@ func (c *Client) BindSASL(mechanism string, credentials []byte) (SASLStep, error
 type SearchResult struct {
 	ldap.Result
 	Entries []*ldap.Entry
+	// Controls are the response controls on the searchResDone -- where the
+	// paged-results cookie arrives (RFC 2696).
+	Controls []ldap.Control
+}
+
+// Cookie is the paged-results cookie, and ok says whether the control was
+// there at all.
+//
+// ⛔ An EMPTY cookie with the control present means "that was the last page"
+// and is how a sequence ends; an ABSENT control means the server did not page
+// at all. A client that cannot tell them apart either stops early or asks
+// forever.
+func (r SearchResult) Cookie() (cookie string, ok bool) {
+	for _, c := range r.Controls {
+		if c.Type != ldap.OIDPaging {
+			continue
+		}
+		p, err := ber.DecodePacketErr(c.Value)
+		if err != nil || len(p.Children) != 2 {
+			return "", false
+		}
+		return string(p.Children[1].Data.Bytes()), true
+	}
+	return "", false
 }
 
 // DNs is every entry's DN, for a test that only cares which entries came.
@@ -334,6 +358,7 @@ func (c *Client) Search(s Search) (SearchResult, error) {
 			out.Entries = append(out.Entries, e)
 		case appSearchResDone:
 			out.Result, err = result(p)
+			out.Controls = responseControls(p)
 			return out, err
 		default:
 			// A continuation reference, or something else. Counted by being
@@ -431,4 +456,42 @@ func (c *Client) exchange(op *ber.Packet) (ldap.Result, error) {
 
 func str(v string) *ber.Packet {
 	return ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, v, "s")
+}
+
+// responseControls reads the controls off an LDAPMessage.
+func responseControls(p *ber.Packet) []ldap.Control {
+	if len(p.Children) < 3 {
+		return nil
+	}
+	f := p.Children[2]
+	if f.ClassType != ber.ClassContext || f.Tag != tagControls {
+		return nil
+	}
+	var out []ldap.Control
+	for _, c := range f.Children {
+		if len(c.Children) == 0 {
+			continue
+		}
+		ctl := ldap.Control{Type: string(c.Children[0].Data.Bytes())}
+		for _, x := range c.Children[1:] {
+			switch x.Tag {
+			case ber.TagBoolean:
+				b := x.Data.Bytes()
+				ctl.Criticality = len(b) > 0 && b[0] != 0
+			case ber.TagOctetString:
+				ctl.Value = append([]byte{}, x.Data.Bytes()...)
+			}
+		}
+		out = append(out, ctl)
+	}
+	return out
+}
+
+// Paged builds the RFC 2696 control: a page size, and the cookie from the
+// previous page (empty to start).
+func Paged(size int, cookie string) ldap.Control {
+	seq := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "realSearchControlValue")
+	seq.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, int64(size), "size"))
+	seq.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, cookie, "cookie"))
+	return ldap.Control{Type: ldap.OIDPaging, Value: seq.Bytes()}
 }

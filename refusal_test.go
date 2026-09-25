@@ -215,7 +215,12 @@ func TestASessionAnswersTheHandler(t *testing.T) {
 	c := dial(t, r)
 	defer c.Close()
 	c.bind(t, "cn=reader,dc=example,dc=org", "let me read")
-	c.searchWith(t, "(uid=*)", &Control{Type: OIDPaging, Value: []byte("page")})
+	// ⛔ NOT OIDPaging. This test is about Session.Controls() carrying what
+	// arrived, and a real OID used as a placeholder stops being a
+	// placeholder the day the server implements it -- which paging did,
+	// turning this into a refused search and a test that blocked forever on
+	// a handler that was never called.
+	c.searchWith(t, "(uid=*)", &Control{Type: OIDPreRead, Value: []byte("page")})
 
 	s := <-seen
 	if s.RemoteAddr() == nil {
@@ -228,7 +233,7 @@ func TestASessionAnswersTheHandler(t *testing.T) {
 		t.Errorf("Conn is a %T", s.Conn())
 	}
 	ctls := s.Controls()
-	if len(ctls) != 1 || ctls[0].Type != OIDPaging || string(ctls[0].Value) != "page" {
+	if len(ctls) != 1 || ctls[0].Type != OIDPreRead || string(ctls[0].Value) != "page" {
 		t.Errorf("the controls arrived as %+v", ctls)
 	}
 	if s.BoundDN() != "cn=reader,dc=example,dc=org" {

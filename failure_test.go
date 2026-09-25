@@ -3,7 +3,6 @@
 package ldap
 
 import (
-	"context"
 	"errors"
 	"net"
 	"testing"
@@ -82,7 +81,7 @@ func TestTheMessageSizeCanBeSet(t *testing.T) {
 func TestSendingOnAClosedConnectionIsSilent(t *testing.T) {
 	left, right := net.Pipe()
 	defer right.Close()
-	c := &conn{raw: left, inflight: map[int]context.CancelFunc{}}
+	c := newConn(&Server{}, left)
 	c.close()
 	// No deadline, no reader: if this wrote anything it would block forever.
 	done := make(chan struct{})
@@ -222,7 +221,7 @@ func (f disconnectFunc) Disconnect(s Session) { f(s) }
 func TestAFailedWriteClosesTheConnection(t *testing.T) {
 	left, right := net.Pipe()
 	right.Close() // the far end is gone before anything is sent
-	c := &conn{raw: left, inflight: map[int]context.CancelFunc{}}
+	c := newConn(&Server{}, left)
 
 	c.send(resultMessage(1, appSearchResDone, Result{Code: Success}))
 	if !c.isClosed() {

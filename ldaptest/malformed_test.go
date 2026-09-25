@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	ber "github.com/go-asn1-ber/asn1-ber"
 	"github.com/go-authn/ldap"
 	"github.com/go-authn/ldap/ldaptest"
 )
@@ -371,3 +372,89 @@ func TestTheRemainingRefusals(t *testing.T) {
 // error branch in Search is unreachable by construction. It is kept, because
 // it is what will report the day the set stops being sealed, and the
 // coverage floor names it rather than a test pretending to exercise it.
+
+// Cookie() and responseControls on the shapes a server can send. A harness
+// that mis-reads a cookie either stops a sequence early or loops forever.
+func TestReadingTheCookieOffWhateverArrives(t *testing.T) {
+	// No controls at all: absent, not empty.
+	var none ldaptest.SearchResult
+	if _, ok := none.Cookie(); ok {
+		t.Error("a result with no controls reported a cookie")
+	}
+	// A control that is not the paging one is skipped.
+	other := ldaptest.SearchResult{Controls: []ldap.Control{{Type: ldap.OIDPreRead, Value: []byte("x")}}}
+	if _, ok := other.Cookie(); ok {
+		t.Error("a different control was read as the paging one")
+	}
+	// ⛔ A paging control whose value does not parse is NOT a cookie. A
+	// harness that returned "" here would report "that was the last page"
+	// about a server that said something else entirely.
+	broken := ldaptest.SearchResult{Controls: []ldap.Control{{Type: ldap.OIDPaging, Value: []byte("junk")}}}
+	if _, ok := broken.Cookie(); ok {
+		t.Error("an unparseable paging control was read as a cookie")
+	}
+}
+
+// The response-control reader, against a server sending odd shapes.
+//
+// ⛔ Built with the BER encoder rather than hand-counted bytes. My first
+// attempt wrote the lengths by hand and got one wrong, which the test
+// reported as "unexpected EOF" -- a failure that looks like the READER is
+// broken when it is the fixture.
+func TestResponseControlsOnOddMessages(t *testing.T) {
+	done := func(extra ...*ber.Packet) []byte {
+		m := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "LDAPMessage")
+		m.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, int64(1), "messageID"))
+		op := ber.Encode(ber.ClassApplication, ber.TypeConstructed, 5, nil, "searchResDone")
+		op.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagEnumerated, int64(0), "resultCode"))
+		op.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "", "matchedDN"))
+		op.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "", "diagnosticMessage"))
+		m.AppendChild(op)
+		for _, e := range extra {
+			m.AppendChild(e)
+		}
+		return m.Bytes()
+	}
+	octet := func(v string) *ber.Packet {
+		return ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, v, "s")
+	}
+
+	// A third field that is not the controls field.
+	c := speaks(t, func(conn net.Conn) { conn.Write(done(octet("junk"))) })
+	got, err := c.Search(ldaptest.Search{Base: "dc=x"})
+	if err != nil {
+		t.Fatalf("a message with an odd third field: %v", err)
+	}
+	if len(got.Controls) != 0 {
+		t.Errorf("a non-controls field was read as %d controls", len(got.Controls))
+	}
+
+	// A control carrying criticality AND a value.
+	ctls := ber.Encode(ber.ClassContext, ber.TypeConstructed, 0, nil, "controls")
+	one := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "control")
+	one.AppendChild(octet(ldap.OIDPaging))
+	one.AppendChild(ber.NewBoolean(ber.ClassUniversal, ber.TypePrimitive, ber.TagBoolean, true, "criticality"))
+	one.AppendChild(octet("hi"))
+	ctls.AppendChild(one)
+	c2 := speaks(t, func(conn net.Conn) { conn.Write(done(ctls)) })
+	got2, err := c2.Search(ldaptest.Search{Base: "dc=x"})
+	if err != nil {
+		t.Fatalf("a message with a full control: %v", err)
+	}
+	if len(got2.Controls) != 1 {
+		t.Fatalf("read %d controls, want 1", len(got2.Controls))
+	}
+	if !got2.Controls[0].Criticality || string(got2.Controls[0].Value) != "hi" {
+		t.Errorf("the control came back as %+v", got2.Controls[0])
+	}
+
+	// A control with no fields at all is skipped rather than fatal.
+	empty := ber.Encode(ber.ClassContext, ber.TypeConstructed, 0, nil, "controls")
+	empty.AppendChild(ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "control"))
+	c3 := speaks(t, func(conn net.Conn) { conn.Write(done(empty)) })
+	if got3, err := c3.Search(ldaptest.Search{Base: "dc=x"}); err != nil {
+		t.Errorf("a control with no fields: %v", err)
+	} else if len(got3.Controls) != 0 {
+		t.Errorf("an empty control was read as %d", len(got3.Controls))
+	}
+}
