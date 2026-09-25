@@ -274,13 +274,32 @@ func TestControlsAreSent(t *testing.T) {
 	if got.Result.Code != ldap.UnavailableCriticalExtension {
 		t.Errorf("a critical control nobody handles answered %s", got.Result.Code)
 	}
-	// Non-critical: ignored, which is what non-critical means.
+	// Non-critical and UNKNOWN: ignored, which is what non-critical means.
 	ok, err := c.Search(ldaptest.Search{
 		Base: "dc=example,dc=org", Scope: ldap.ScopeWholeSubtree,
-		Controls: []ldap.Control{{Type: ldap.OIDPaging, Value: []byte("x")}},
+		Controls: []ldap.Control{{Type: ldap.OIDPreRead, Value: []byte("x")}},
 	})
 	if err != nil || ok.Result.Code != ldap.Success {
-		t.Errorf("a non-critical control answered %s (%v)", ok.Result.Code, err)
+		t.Errorf("a non-critical unknown control answered %s (%v)", ok.Result.Code, err)
+	}
+
+	// ⛔ A control the server RECOGNISES but cannot parse is a protocol
+	// error even when it is not critical, and paging is why. "Ignore it and
+	// carry on" would return the WHOLE directory to a client that asked for
+	// one page -- a different answer, larger than it can handle, and one it
+	// has no way to tell from a small directory.
+	bad, err := c.Search(ldaptest.Search{
+		Base: "dc=example,dc=org", Scope: ldap.ScopeWholeSubtree,
+		Controls: []ldap.Control{{Type: ldap.OIDPaging, Value: []byte("not a control")}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bad.Result.Code != ldap.ProtocolError {
+		t.Errorf("a malformed paging control answered %s", bad.Result.Code)
+	}
+	if len(bad.Entries) != 0 {
+		t.Errorf("it returned %d entries anyway", len(bad.Entries))
 	}
 }
 
@@ -351,4 +370,86 @@ func selfSigned(t *testing.T) *tls.Config {
 		t.Fatal(err)
 	}
 	return &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}}
+}
+
+// Paging through ldaptest, which is how a consumer will drive it: the
+// helper builds the control and reads the cookie back, so a test does not
+// have to know the BER.
+func TestPagingThroughTheHelper(t *testing.T) {
+	var all []*ldap.Entry
+	for i := 0; i < 7; i++ {
+		all = append(all, &ldap.Entry{
+			DN: "uid=" + string(rune('a'+i)) + ",dc=example,dc=org",
+			Attributes: []*ldap.Attribute{
+				ldap.StringAttribute("objectClass", "person"),
+				ldap.StringAttribute("uid", string(rune('a'+i))),
+			},
+		})
+	}
+	f := &fixture{entries: all}
+	c := serve(t, &ldap.Server{Bind: f, Search: f})
+	c.Bind("cn=reader", "let me read")
+
+	seen := map[string]bool{}
+	cookie := ""
+	for page := 1; ; page++ {
+		if page > 10 {
+			t.Fatal("the sequence never ended")
+		}
+		got, err := c.Search(ldaptest.Search{
+			Base: "dc=example,dc=org", Scope: ldap.ScopeWholeSubtree,
+			Controls: []ldap.Control{ldaptest.Paged(3, cookie)},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Result.Code != ldap.Success {
+			t.Fatalf("page %d answered %s", page, got.Result.Code)
+		}
+		for _, dn := range got.DNs() {
+			if seen[dn] {
+				t.Errorf("%s arrived twice", dn)
+			}
+			seen[dn] = true
+		}
+		next, ok := got.Cookie()
+		if !ok {
+			t.Fatalf("page %d carried no paged control", page)
+		}
+		if next == "" {
+			break
+		}
+		cookie = next
+	}
+	if len(seen) != len(all) {
+		t.Errorf("saw %d entries, want %d", len(seen), len(all))
+	}
+
+	// ⛔ A search with NO paging control carries no cookie at all, which is
+	// a different answer from an empty one: absent means "this server did
+	// not page", empty means "that was the last page". A client that cannot
+	// tell them apart either stops early or asks forever.
+	plain, err := c.Search(ldaptest.Search{Base: "dc=example,dc=org", Scope: ldap.ScopeWholeSubtree})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := plain.Cookie(); ok {
+		t.Error("an unpaged search carried a paged control")
+	}
+	if len(plain.Entries) != len(all) {
+		t.Errorf("an unpaged search returned %d entries, want %d", len(plain.Entries), len(all))
+	}
+
+	// A cookie the server never issued is refused, and Cookie() says so
+	// rather than inventing one.
+	bad, err := c.Search(ldaptest.Search{
+		Base: "dc=example,dc=org", Scope: ldap.ScopeWholeSubtree,
+		Controls: []ldap.Control{ldaptest.Paged(3, "nonsense")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bad.Result.Code == ldap.Success {
+		t.Error("an invented cookie was accepted")
+	}
 }

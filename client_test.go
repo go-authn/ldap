@@ -31,6 +31,9 @@ type client struct {
 	// values is every attribute value the last search returned, as
 	// "name: value", for asserting what an entry published.
 	values []string
+	// lastControls is what the last searchResDone carried, which is where
+	// the paged-results cookie arrives.
+	lastControls []Control
 }
 
 func dial(t *testing.T, r *running) *client {
@@ -316,8 +319,43 @@ func (c *client) collect(t *testing.T) ([]string, Result) {
 		case appSearchResEntry:
 			dns = append(dns, string(p.Children[1].Children[0].Data.Bytes()))
 		case appSearchResDone:
+			c.lastControls = controlsOf(p)
 			return dns, resultOf(t, p)
 		}
+	}
+}
+
+// controlsOf reads the response controls off an LDAPMessage.
+func controlsOf(p *ber.Packet) []Control {
+	if len(p.Children) < 3 {
+		return nil
+	}
+	got, err := decodeControls(p.Children[2])
+	if err != nil {
+		return nil
+	}
+	return got
+}
+
+// sendSearch writes a search carrying controls and does NOT wait for the
+// answer, for a test about what happens while one is in flight.
+func (c *client) sendSearch(t *testing.T, filter string, controls ...*Control) {
+	t.Helper()
+	m := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "LDAPMessage")
+	m.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, int64(c.next()), "messageID"))
+	m.AppendChild(searchOp(t, filter))
+	list := ber.Encode(ber.ClassContext, ber.TypeConstructed, tagControls, nil, "controls")
+	for _, ctl := range controls {
+		one := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "control")
+		one.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, ctl.Type, "controlType"))
+		if ctl.Value != nil {
+			one.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, string(ctl.Value), "controlValue"))
+		}
+		list.AppendChild(one)
+	}
+	m.AppendChild(list)
+	if _, err := c.c.Write(m.Bytes()); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -412,4 +450,18 @@ func (c *client) handshake(t *testing.T) {
 		t.Fatalf("the handshake failed: %v", err)
 	}
 	c.upgrade(tc)
+}
+
+// pagesOpen reports how many paged searches this client's connection holds.
+// It reaches into the server because the number is not observable from the
+// wire -- and "nothing was left running" is exactly the thing a leak test
+// has to assert.
+func (c *client) pagesOpen(t *testing.T, s *Server) int {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for conn := range s.conns {
+		return conn.pages.count()
+	}
+	return 0
 }

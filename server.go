@@ -58,6 +58,14 @@ type Server struct {
 
 	// MaxMessageSize bounds one message. Zero means DefaultMaxMessageSize.
 	MaxMessageSize int
+	// MaxPagedSearches is how many paged searches (RFC 2696) one connection
+	// may hold open at once. Zero means DefaultMaxPagedSearches.
+	//
+	// ⛔ Each one is a goroutine parked on its next entry, holding whatever
+	// the handler holds. A client that starts them and never finishes them
+	// is a resource exhaustion that needs no credentials, because the first
+	// page is served before anything is known about it.
+	MaxPagedSearches int
 	// MaxEntries bounds what one search may return, whatever the client
 	// asked for. Zero means no server-side limit.
 	//

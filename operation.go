@@ -68,7 +68,9 @@ func (c *conn) operation(ctx context.Context, m *message, log *slog.Logger) {
 	// refused (RFC 4511 4.1.11): the client has said this is not the
 	// operation it wants unless the control is honoured. Performing it
 	// anyway does something else and reports success.
-	if ctl := UnhandledCritical(m.controls); ctl != nil {
+	// The controls this server honours. A critical one NOT in this list
+	// refuses the operation, which is the whole point of criticality.
+	if ctl := UnhandledCritical(m.controls, OIDPaging); ctl != nil {
 		c.send(resultMessage(m.id, resp, Refuse(UnavailableCriticalExtension,
 			"the control %s is marked critical and nothing here handles it", ctl.Type)))
 		return
@@ -100,6 +102,19 @@ func (c *conn) operation(ctx context.Context, m *message, log *slog.Logger) {
 	case appBindRequest:
 		c.bind(ctx, m, log)
 	case appSearchRequest:
+		// ⛔ A paged search is answered on a path of its own, because it
+		// OUTLIVES this request: the handler stays running, parked on its
+		// next entry, until the client asks for the next page or goes away.
+		if ctl := Find(m.controls, OIDPaging); ctl != nil && c.srv.Search != nil {
+			if err := Unsupported(search.Filter); err != nil {
+				c.send(resultMessage(m.id, appSearchResDone, Refuse(InappropriateMatching, "%v", err)))
+				return
+			}
+			log.Debug("paged search", "base", search.BaseObject,
+				"scope", search.Scope.String(), "filter", shapeOf(search.Filter), "dn", c.BoundDN())
+			c.searchPaged(ctx, m, search, ctl, log)
+			return
+		}
 		c.search(ctx, m, search, log)
 	case appCompareRequest:
 		c.compare(ctx, m)

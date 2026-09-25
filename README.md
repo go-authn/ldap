@@ -62,15 +62,26 @@ unauthenticated packet must not take the directory down.
 The server answers binds (simple and SASL), searches, compares, extended
 operations, StartTLS, abandon, the **root DSE** and all four writes.
 
-Coverage is **99.9%**, and the missing line is named rather than rounded
-away: the `EncodeFilter` error branch in `ldaptest`'s `Search` cannot run,
-because `Filter` is a sealed interface and `EncodeFilter` is total over the
-nine types that satisfy it. The branch is kept — it is what reports the day
-that stops being true — and the CI floor is 99.9% with the reason in the
-lane. The floor is raised, never lowered.
+Coverage is **99.7%**, and the three missing lines are named rather than
+rounded away: the `EncodeFilter` error branch in `ldaptest`'s `Search`
+(`Filter` is a sealed interface and `EncodeFilter` is total over the nine
+types that satisfy it), and the two branches that handle `crypto/rand`
+failing while making a paging cookie. Reaching those two would mean adding an
+injection point for the sake of a number. They are kept because a cookie that
+cannot be made must not be silently skipped — an empty cookie means "last
+page", so skipping it would end the sequence and lose the rest of the
+directory.
 
-Still to come: the paged-results control (RFC 2696), and the read controls
-(RFC 4527) that let a client see what its write actually did.
+**Paged results** (RFC 2696) are here: a search answered a page at a time,
+because a size limit is not an answer to "give me everybody" — a client that
+truncates cannot tell that from a directory with fewer people in it. The
+handler is left RUNNING between pages, parked on its next entry, which is
+what keeps the result consistent: re-running the search per page and skipping
+the first N is not only O(n²), it sends an entry twice or never when somebody
+is added between two pages.
+
+Still to come: the read controls (RFC 4527) that let a client see what its
+write actually did.
 
 ⛔ This section said "at 100% coverage" and "still to come: the root DSE"
 for about six hours, both written here by the same hands that then made them
