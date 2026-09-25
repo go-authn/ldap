@@ -58,6 +58,15 @@ func (c *conn) rootDSE() *Entry {
 	}
 	e.Attributes = append(e.Attributes, OperationalAttribute("supportedExtension", extensions...))
 
+	// ⛔ These two were MISSING while the server honoured all three controls
+	// and both features. For supportedControl the omission is not merely a
+	// gap: RFC 4512 5.1.3 says "if the server does not support any request
+	// controls, this attribute will be absent" -- so leaving it out states
+	// that there are none. Paged results had just shipped and no client
+	// reading the root DSE could discover it.
+	e.Attributes = append(e.Attributes, OperationalAttribute("supportedControl", supportedControls...))
+	e.Attributes = append(e.Attributes, OperationalAttribute("supportedFeatures", supportedFeatures...))
+
 	if v := c.srv.Vendor; v != "" {
 		e.Attributes = append(e.Attributes, OperationalAttribute("vendorName", v))
 	}
