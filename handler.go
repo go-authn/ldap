@@ -139,9 +139,34 @@ type ExtendedResult struct {
 // two different places, and telling a client the second when the first is
 // true sends them to argue about permissions that do not exist.
 
+// A WriteResult is what a write answers.
+//
+// ⛔ It carries the entry copies RFC 4527's read controls asked for, because
+// only the handler can produce them: the read and the update have to be "one
+// atomic action isolated from other update operations", and a server that
+// read the entry, wrote, and read again would be doing three things with
+// gaps between them. The copy it returned could be one somebody ELSE's write
+// made -- a lie in the shape of a confirmation.
+//
+// Both are ignored unless the client asked (req.PreRead / req.PostRead is
+// non-nil) and the result is a success: RFC 4527 3.1 says no response
+// control accompanies a failure, because there is nothing to confirm.
+//
+// ⛔ A handler MUST NOT fill these for a client that may not read the entry.
+// 4527 4: "Servers MUST ensure that the client is authorized for reading of
+// the information provided in this control." A write somebody may perform is
+// not a read they may perform.
+type WriteResult struct {
+	Result
+	// PreRead is the entry as it was BEFORE the operation.
+	PreRead *Entry
+	// PostRead is the entry as it became.
+	PostRead *Entry
+}
+
 // An Adder adds an entry (RFC 4511 4.7).
 type Adder interface {
-	Add(ctx context.Context, s Session, req *AddRequest) (Result, error)
+	Add(ctx context.Context, s Session, req *AddRequest) (WriteResult, error)
 }
 
 // A Modifier modifies one (RFC 4511 4.6).
@@ -151,17 +176,17 @@ type Adder interface {
 // state the client never asked for, and must answer as though it applied
 // none.
 type Modifier interface {
-	Modify(ctx context.Context, s Session, req *ModifyRequest) (Result, error)
+	Modify(ctx context.Context, s Session, req *ModifyRequest) (WriteResult, error)
 }
 
 // A Deleter deletes one (RFC 4511 4.8).
 type Deleter interface {
-	Delete(ctx context.Context, s Session, req *DeleteRequest) (Result, error)
+	Delete(ctx context.Context, s Session, req *DeleteRequest) (WriteResult, error)
 }
 
 // A DNModifier renames or moves one (RFC 4511 4.9).
 type DNModifier interface {
-	ModifyDN(ctx context.Context, s Session, req *ModifyDNRequest) (Result, error)
+	ModifyDN(ctx context.Context, s Session, req *ModifyDNRequest) (WriteResult, error)
 }
 
 // An Abandoner is told a client gave up on an operation (RFC 4511 4.11).

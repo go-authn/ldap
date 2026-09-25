@@ -63,10 +63,27 @@ type ExtendedRequest struct {
 type AddRequest struct {
 	DN         string
 	Attributes []*Attribute
+
+	// PreRead and PostRead are the attribute selections a client asked for
+	// with RFC 4527's read entry controls, or nil when it asked for neither.
+	// A handler that can honour them fills WriteResult; one that cannot
+	// leaves them, and no response control is sent.
+	PreRead  *ReadSelection
+	PostRead *ReadSelection
 }
 
-// A DeleteRequest is RFC 4511 4.8. It is a DN and nothing else.
-type DeleteRequest struct{ DN string }
+// A DeleteRequest is RFC 4511 4.8: a DN, and what the client asked to see of
+// the entry before it goes.
+type DeleteRequest struct {
+	DN string
+
+	// PreRead and PostRead are the attribute selections a client asked for
+	// with RFC 4527's read entry controls, or nil when it asked for neither.
+	// A handler that can honour them fills WriteResult; one that cannot
+	// leaves them, and no response control is sent.
+	PreRead  *ReadSelection
+	PostRead *ReadSelection
+}
 
 // A ModifyDNRequest is RFC 4511 4.9.
 type ModifyDNRequest struct {
@@ -76,6 +93,13 @@ type ModifyDNRequest struct {
 	// NewSuperior moves the entry to another parent. Empty means "leave it
 	// where it is", which is a rename rather than a move.
 	NewSuperior string
+
+	// PreRead and PostRead are the attribute selections a client asked for
+	// with RFC 4527's read entry controls, or nil when it asked for neither.
+	// A handler that can honour them fills WriteResult; one that cannot
+	// leaves them, and no response control is sent.
+	PreRead  *ReadSelection
+	PostRead *ReadSelection
 }
 
 // A ModifyOperation is one of RFC 4511 4.6's three.
@@ -135,4 +159,21 @@ type Change struct {
 type ModifyRequest struct {
 	DN      string
 	Changes []Change
+
+	// PreRead and PostRead are the attribute selections a client asked for
+	// with RFC 4527's read entry controls, or nil when it asked for neither.
+	// A handler that can honour them fills WriteResult; one that cannot
+	// leaves them, and no response control is sent.
+	PreRead  *ReadSelection
+	PostRead *ReadSelection
 }
+
+// The read-control accessors, so that one function can answer any write.
+func (r *AddRequest) preRead() *ReadSelection       { return r.PreRead }
+func (r *AddRequest) postRead() *ReadSelection      { return r.PostRead }
+func (r *ModifyRequest) preRead() *ReadSelection    { return r.PreRead }
+func (r *ModifyRequest) postRead() *ReadSelection   { return r.PostRead }
+func (r *DeleteRequest) preRead() *ReadSelection    { return r.PreRead }
+func (r *DeleteRequest) postRead() *ReadSelection   { return r.PostRead }
+func (r *ModifyDNRequest) preRead() *ReadSelection  { return r.PreRead }
+func (r *ModifyDNRequest) postRead() *ReadSelection { return r.PostRead }

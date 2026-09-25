@@ -60,7 +60,8 @@ unauthenticated packet must not take the directory down.
 ## Status
 
 The server answers binds (simple and SASL), searches, compares, extended
-operations, StartTLS, abandon, the **root DSE** and all four writes.
+operations, StartTLS, abandon, the **root DSE**, all four writes, **paged
+results** (RFC 2696) and the **read entry controls** (RFC 4527).
 
 Coverage is **99.7%**, and the three missing lines are named rather than
 rounded away: the `EncodeFilter` error branch in `ldaptest`'s `Search`
@@ -80,8 +81,13 @@ what keeps the result consistent: re-running the search per page and skipping
 the first N is not only O(n²), it sends an entry twice or never when somebody
 is added between two pages.
 
-Still to come: the read controls (RFC 4527) that let a client see what its
-write actually did.
+**The read entry controls** (RFC 4527) are here too: a write can report the
+entry as it was before and as it became. They are answered by the HANDLER,
+not by this package, and that is not a convenience — 4527 requires the read
+and the update to be "one atomic action isolated from other update
+operations", and a server that read, wrote, and read again would be doing
+three things with gaps between them, so the copy it returned could be one
+somebody else's write made. A lie in the shape of a confirmation.
 
 ⛔ This section said "at 100% coverage" and "still to come: the root DSE"
 for about six hours, both written here by the same hands that then made them
