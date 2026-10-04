@@ -128,3 +128,38 @@ func searchRequest(t *testing.T, base, filter string, attrs ...string) []byte {
 	msg.AppendChild(s)
 	return msg.Bytes()
 }
+
+// The walk's own edges: what it counts, and what it leaves to the decoder.
+// None of these may be refused as "too many" -- a frame the walk cannot
+// follow is not evidence of amplification, and the decoder has the better
+// error for it.
+func TestCountElementsAtItsEdges(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		b    []byte
+		max  int
+		want error
+	}{
+		{"empty", nil, 1, nil},
+		{"high tag number, two primitives", []byte{0x5f, 0x81, 0x01, 0x00, 0x04, 0x00}, 2, nil},
+		{"high tag number, three needed", []byte{0x5f, 0x81, 0x01, 0x00, 0x04, 0x00, 0x04, 0x00}, 2, errTooManyElements},
+		{"tag with no length", []byte{0x04}, 1, nil},
+		{"high tag cut short", []byte{0x5f, 0x81}, 1, nil},
+		{"long form length", []byte{0x04, 0x81, 0x02, 'h', 'i', 0x04, 0x00}, 2, nil},
+		{"long form, one too many", []byte{0x04, 0x81, 0x02, 'h', 'i', 0x04, 0x00, 0x04, 0x00}, 2, errTooManyElements},
+		{"indefinite length", []byte{0x30, 0x80, 0x04, 0x00}, 1, nil},
+		{"length of five octets", []byte{0x04, 0x85, 1, 1, 1, 1, 1}, 1, nil},
+		{"length octets cut short", []byte{0x04, 0x82, 0x01}, 1, nil},
+		{"constructed contents counted", []byte{0x30, 0x04, 0x04, 0x00, 0x04, 0x00}, 2, errTooManyElements},
+	} {
+		if got := countElements(tc.b, tc.max); !errors.Is(got, tc.want) || (got == nil) != (tc.want == nil) {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	if got := (&Server{}).maxMessageElements(); got != DefaultMaxMessageElements {
+		t.Errorf("a Server with no cap set allows %d elements, not the default %d", got, DefaultMaxMessageElements)
+	}
+	if got := (&Server{MaxMessageElements: 7}).maxMessageElements(); got != 7 {
+		t.Errorf("a Server capped at 7 elements allows %d", got)
+	}
+}
