@@ -58,6 +58,9 @@ type Server struct {
 
 	// MaxMessageSize bounds one message. Zero means DefaultMaxMessageSize.
 	MaxMessageSize int
+	// MaxMessageElements bounds how many BER elements one message may hold.
+	// Zero means DefaultMaxMessageElements.
+	MaxMessageElements int
 	// MaxPagedSearches is how many paged searches (RFC 2696) one connection
 	// may hold open at once. Zero means DefaultMaxPagedSearches.
 	//
@@ -115,6 +118,13 @@ func (s *Server) logger() *slog.Logger {
 		return s.Log
 	}
 	return slog.New(slog.DiscardHandler)
+}
+
+func (s *Server) maxMessageElements() int {
+	if s.MaxMessageElements > 0 {
+		return s.MaxMessageElements
+	}
+	return DefaultMaxMessageElements
 }
 
 func (s *Server) maxMessageSize() int {

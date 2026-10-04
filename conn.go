@@ -88,7 +88,7 @@ func (s *Server) serve(nc net.Conn) {
 			// would close a busy client mid-conversation.
 			_ = nc.SetReadDeadline(time.Now().Add(idle))
 		}
-		m, err := readMessage(c.r, s.maxMessageSize())
+		m, err := readMessage(c.r, s.maxMessageSize(), s.maxMessageElements())
 		if err != nil {
 			switch {
 			case errors.Is(err, errClosed) || c.isClosed():

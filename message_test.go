@@ -29,7 +29,7 @@ func unbindOp() *ber.Packet {
 
 func read(t *testing.T, b []byte) (*message, error) {
 	t.Helper()
-	return readMessage(bufio.NewReader(bytes.NewReader(b)), DefaultMaxMessageSize)
+	return readMessage(bufio.NewReader(bytes.NewReader(b)), DefaultMaxMessageSize, DefaultMaxMessageElements)
 }
 
 // ⛔ RFC 4511 4.1.1: MessageID is INTEGER (0 .. maxInt), and ZERO is reserved
