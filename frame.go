@@ -132,3 +132,59 @@ func decodeFrame(b []byte) (*ber.Packet, error) {
 	}
 	return p, nil
 }
+
+// DefaultMaxMessageElements is how many BER elements one message may hold.
+//
+// ⛔ The size cap alone bounds bytes, not memory: decoding builds a packet
+// of some 190 bytes for every element, and an empty OCTET STRING is two
+// bytes on the wire. 4 MiB of them, sent before any bind, held 373 MiB live
+// while decoding (measured), per connection. 16384 elements is a search
+// with thousands of filter terms, or a modify with thousands of values --
+// about 3 MiB of packets at most.
+const DefaultMaxMessageElements = 16384
+
+// errTooManyElements is a message holding more elements than allowed.
+var errTooManyElements = errors.New("ldap: the message holds more elements than this server decodes")
+
+// countElements walks the frame's tags and lengths, without building
+// anything, and refuses one holding more than max elements: linear in the
+// bytes, constant in memory, run before the decoder that is neither. A
+// frame it cannot walk is left to the decoder to refuse.
+func countElements(b []byte, max int) error {
+	n := 0
+	for i := 0; i < len(b); {
+		n++
+		if n > max {
+			return errTooManyElements
+		}
+		tag := b[i]
+		i++
+		if tag&0x1f == 0x1f { // high tag number: continuation octets
+			for i < len(b) && b[i]&0x80 != 0 {
+				i++
+			}
+			i++
+		}
+		if i >= len(b) {
+			return nil
+		}
+		l := int(b[i])
+		i++
+		if l&0x80 != 0 {
+			k := l & 0x7f
+			if k == 0 || k > 4 || i+k > len(b) {
+				return nil // indefinite or absurd: readFrame and the decoder refuse it
+			}
+			l = 0
+			for _, c := range b[i : i+k] {
+				l = l<<8 | int(c)
+			}
+			i += k
+		}
+		if tag&0x20 == 0 { // primitive: its contents are not elements
+			i += l
+		}
+		// constructed: its contents are the next elements, walked in turn
+	}
+	return nil
+}

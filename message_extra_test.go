@@ -46,7 +46,7 @@ func TestAMessageWithBrokenControlsIsRefused(t *testing.T) {
 	m.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, int64(1), "messageID"))
 	m.AppendChild(ber.Encode(ber.ClassApplication, ber.TypePrimitive, appUnbindRequest, nil, "unbindRequest"))
 	m.AppendChild(ctls)
-	if _, err := readMessage(bufio.NewReader(bytes.NewReader(m.Bytes())), DefaultMaxMessageSize); err == nil {
+	if _, err := readMessage(bufio.NewReader(bytes.NewReader(m.Bytes())), DefaultMaxMessageSize, DefaultMaxMessageElements); err == nil {
 		t.Error("a message with an unreadable control was accepted")
 	}
 }
@@ -58,7 +58,7 @@ func TestReadMessageAppliesTheLimit(t *testing.T) {
 	m.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, int64(1), "messageID"))
 	m.AppendChild(ber.NewString(ber.ClassApplication, ber.TypePrimitive, appExtendedRequest,
 		string(make([]byte, 4096)), "big"))
-	if _, err := readMessage(bufio.NewReader(bytes.NewReader(m.Bytes())), 64); err == nil {
+	if _, err := readMessage(bufio.NewReader(bytes.NewReader(m.Bytes())), 64, DefaultMaxMessageElements); err == nil {
 		t.Error("a message over the limit was read")
 	}
 }
@@ -73,7 +73,7 @@ func TestAWellFramedPacketThatIsNotBER(t *testing.T) {
 	if _, err := readFrame(bufio.NewReader(bytes.NewReader(junk)), DefaultMaxMessageSize); err != nil {
 		t.Fatalf("the frame itself should read: %v", err)
 	}
-	if _, err := readMessage(bufio.NewReader(bytes.NewReader(junk)), DefaultMaxMessageSize); err == nil {
+	if _, err := readMessage(bufio.NewReader(bytes.NewReader(junk)), DefaultMaxMessageSize, DefaultMaxMessageElements); err == nil {
 		t.Error("a well-framed packet that is not BER was accepted")
 	}
 }

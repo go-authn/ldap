@@ -97,6 +97,12 @@ four gigabytes is refused before anything is reserved for it (`MaxMessageSize`,
 Go kills the *process* — one unauthenticated packet must not take the
 directory down.
 
+Bytes are not memory: the decoder builds a packet of some 190 bytes for each
+BER element, and an empty OCTET STRING is two bytes on the wire, so 4 MiB of
+them held 373 MiB before any bind. The elements of a message are counted
+first, by a walk that builds nothing, and one holding more than
+`MaxMessageElements` (16384 by default) is refused before it is decoded.
+
 Under that limit the body is read into a buffer that grows with what has
 actually arrived, so a length prefix on its own reserves nothing. And a
 connection is closed when a whole message has not arrived within

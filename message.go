@@ -67,9 +67,12 @@ var errClosed = errors.New("ldap: the connection closed")
 
 // readMessage reads one LDAPMessage. The frame is bounded before it is
 // decoded -- see readFrame.
-func readMessage(r *bufio.Reader, maxSize int) (*message, error) {
+func readMessage(r *bufio.Reader, maxSize, maxElements int) (*message, error) {
 	raw, err := readFrame(r, maxSize)
 	if err != nil {
+		return nil, err
+	}
+	if err := countElements(raw, maxElements); err != nil {
 		return nil, err
 	}
 	p, err := decodeFrame(raw)
