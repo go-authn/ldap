@@ -111,6 +111,17 @@ connection is closed when a whole message has not arrived within
 length prefix and then nothing is closed on the same clock as one that sends
 nothing at all.
 
+Each operation runs in its own goroutine and keeps its decoded message, so
+the number in flight is bounded too, as slapd bounds it (`conn_max_pending`
+in slapd.conf(5)). `MaxPending` applies before a bind and `MaxPendingAuth`
+after, defaulting to slapd's 100 and 1000; a negative value means no limit.
+A connection that sends one more gets a `busy` notice of disconnection and
+is closed. Any connection that ends (an unbind, an idle notice, too many
+operations) is closed **before** this server waits for its operations, which
+are cancelled. RFC 4511 §4.3 says an unbind "terminates any outstanding
+operations". Before v0.6.0 the server waited first, so a connection told it
+was ending stayed open for as long as its slowest operation took.
+
 ## Status
 
 The server answers binds (simple and SASL), searches, compares, extended

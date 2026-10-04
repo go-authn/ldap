@@ -88,6 +88,17 @@ type Server struct {
 	// and then a connection nobody had authenticated could be held open for
 	// ever by sending six bytes.
 	IdleTimeout time.Duration
+	// MaxPending bounds the operations one connection may have in flight
+	// before it has bound; MaxPendingAuth, after. Zero means
+	// DefaultMaxPending and DefaultMaxPendingAuth; a negative value means no
+	// limit. A connection that goes over is sent a notice of disconnection
+	// and closed, as slapd does with conn_max_pending.
+	//
+	// ⛔ Every operation runs in its own goroutine and holds its decoded
+	// message until it ends, so without this a client pipelining requests
+	// faster than they are answered -- before any bind -- grew this
+	// process's memory without bound.
+	MaxPending, MaxPendingAuth int
 
 	// NamingContexts is what this server holds, published on the root DSE so
 	// that a client can find out where to search (RFC 4512 5.1.2).
@@ -125,6 +136,25 @@ func (s *Server) maxMessageElements() int {
 		return s.MaxMessageElements
 	}
 	return DefaultMaxMessageElements
+}
+
+// The defaults are slapd's (slapd.conf(5), conn_max_pending and
+// conn_max_pending_auth): 100 operations for a session nobody has
+// authenticated, 1000 for one somebody has.
+const (
+	DefaultMaxPending     = 100
+	DefaultMaxPendingAuth = 1000
+)
+
+func (s *Server) maxPending(bound bool) int {
+	n, def := s.MaxPending, DefaultMaxPending
+	if bound {
+		n, def = s.MaxPendingAuth, DefaultMaxPendingAuth
+	}
+	if n == 0 {
+		return def
+	}
+	return n
 }
 
 func (s *Server) maxMessageSize() int {

@@ -80,6 +80,14 @@ func (s *Server) serve(nc net.Conn) {
 
 	var wg sync.WaitGroup
 	defer wg.Wait()
+	// ⛔ Closed BEFORE waiting, and that order is the point: closing cancels
+	// what is in flight, so the wait is short. Waiting first left a
+	// connection that had been told it was ending -- an unbind, an idle
+	// notice, too many operations -- open for as long as its slowest
+	// operation took, which for a parked handler is for ever. RFC 4511 4.3:
+	// on an unbind the server "terminates any outstanding operations" and
+	// closes the connection.
+	defer c.close()
 
 	for {
 		if idle := s.idleTimeout(); idle > 0 {
@@ -145,16 +153,29 @@ func (c *conn) dispatch(wg *sync.WaitGroup, m *message, log *slog.Logger) bool {
 			c.startTLS(m.id, log)
 			return false
 		}
-		c.run(wg, m, func(ctx context.Context) { c.extended(ctx, m, req) })
-		return false
+		return c.overLimit(c.run(wg, m, func(ctx context.Context) { c.extended(ctx, m, req) }), log)
 	}
 
-	c.run(wg, m, func(ctx context.Context) { c.operation(ctx, m, log) })
-	return false
+	return c.overLimit(c.run(wg, m, func(ctx context.Context) { c.operation(ctx, m, log) }), log)
 }
 
-// run starts an operation, tracked so that an abandon can reach it.
-func (c *conn) run(wg *sync.WaitGroup, m *message, f func(context.Context)) {
+// overLimit ends a connection that has more operations in flight than it is
+// allowed: the client is told why, in the notice of disconnection RFC 4511
+// 4.4.1 has for a server ending a connection, and nothing it sent after the
+// limit is answered.
+func (c *conn) overLimit(started bool, log *slog.Logger) bool {
+	if started {
+		return false
+	}
+	log.Info("closing a connection with too many operations in flight")
+	c.notice(Busy, "too many operations in flight on this connection")
+	return true
+}
+
+// run starts an operation, tracked so that an abandon can reach it. It
+// returns false only when the connection has as many operations in flight as
+// it may, and the operation was not started.
+func (c *conn) run(wg *sync.WaitGroup, m *message, f func(context.Context)) bool {
 	ctx, cancel := context.WithCancel(context.Background())
 	if c.srv.Timeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, c.srv.Timeout)
@@ -168,7 +189,12 @@ func (c *conn) run(wg *sync.WaitGroup, m *message, f func(context.Context)) {
 		cancel()
 		c.send(resultMessage(m.id, responseFor(m.op.Tag), Refuse(ProtocolError,
 			"message id %d is already in flight", m.id)))
-		return
+		return true
+	}
+	if limit := c.srv.maxPending(c.boundDN != ""); limit > 0 && len(c.inflight) >= limit {
+		c.mu.Unlock()
+		cancel()
+		return false
 	}
 	c.inflight[m.id] = cancel
 	c.controls = m.controls
@@ -185,6 +211,7 @@ func (c *conn) run(wg *sync.WaitGroup, m *message, f func(context.Context)) {
 		}()
 		f(ctx)
 	}()
+	return true
 }
 
 // abandon cancels an operation. There is no response to an abandon.
