@@ -74,8 +74,16 @@ type Server struct {
 	MaxEntries int
 	// Timeout is how long one operation may take. Zero means no limit.
 	Timeout time.Duration
-	// IdleTimeout closes a connection nothing has been sent on. Zero means
-	// never.
+	// IdleTimeout is how long this server waits for a client to send a
+	// message: from the end of the previous one until the new one has
+	// arrived IN FULL. Zero means DefaultIdleTimeout; a negative value means
+	// never, for a deployment that bounds connections some other way.
+	//
+	// ⛔ The deadline covers the whole message, not only its first byte, so
+	// a client that sends a length prefix and then nothing is closed on the
+	// same clock as one that sends nothing at all. Zero used to mean never,
+	// and then a connection nobody had authenticated could be held open for
+	// ever by sending six bytes.
 	IdleTimeout time.Duration
 
 	// NamingContexts is what this server holds, published on the root DSE so
@@ -114,6 +122,30 @@ func (s *Server) maxMessageSize() int {
 		return s.MaxMessageSize
 	}
 	return DefaultMaxMessageSize
+}
+
+// DefaultIdleTimeout is how long a server whose IdleTimeout is zero waits
+// for the next message to arrive in full.
+//
+// ⛔ net/http leaves its read timeouts at zero, meaning none, and every
+// deployment that forgets ReadHeaderTimeout inherits a slow-client hole; a
+// default that is safe only for callers who read the documentation is not a
+// default. Five minutes is long enough that a pooled client between bursts
+// is rarely cut off -- and one that is gets the notice of disconnection of
+// RFC 4511 4.4.1 saying why -- and short enough that a connection
+// that never says anything does not hold a goroutine and a socket all day.
+const DefaultIdleTimeout = 5 * time.Minute
+
+// idleTimeout is the read deadline to set before each message, or zero for
+// none.
+func (s *Server) idleTimeout() time.Duration {
+	switch {
+	case s.IdleTimeout > 0:
+		return s.IdleTimeout
+	case s.IdleTimeout < 0:
+		return 0
+	}
+	return DefaultIdleTimeout
 }
 
 // Serve answers connections until the listener is closed.

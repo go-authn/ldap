@@ -82,11 +82,11 @@ func (s *Server) serve(nc net.Conn) {
 	defer wg.Wait()
 
 	for {
-		if s.IdleTimeout > 0 {
+		if idle := s.idleTimeout(); idle > 0 {
 			// The deadline is reset per message rather than set once: a
 			// connection sending steadily is not idle, and one set once
 			// would close a busy client mid-conversation.
-			_ = nc.SetReadDeadline(time.Now().Add(s.IdleTimeout))
+			_ = nc.SetReadDeadline(time.Now().Add(idle))
 		}
 		m, err := readMessage(c.r, s.maxMessageSize())
 		if err != nil {
@@ -103,7 +103,7 @@ func (s *Server) serve(nc net.Conn) {
 				// client's log looking for a bug that is not there.
 				// RFC 4511 4.4.1 has `unavailable` for a server ending a
 				// connection of its own accord.
-				log.Debug("closing an idle connection", "after", s.IdleTimeout)
+				log.Debug("closing an idle connection", "after", s.idleTimeout())
 				c.notice(Unavailable, "this connection was idle")
 			default:
 				log.Info("refusing a message", "err", err)

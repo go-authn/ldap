@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 
 	ber "github.com/go-asn1-ber/asn1-ber"
 )
@@ -38,7 +39,7 @@ const DefaultMaxMessageSize = 4 << 20 // 4 MiB
 // encoding", so the indefinite form is a protocol error here rather than
 // something to support -- a parser that accepts it accepts messages the
 // protocol does not have.
-func readFrame(r *bufio.Reader, max int) ([]byte, error) {
+func readFrame(r *bufio.Reader, limit int) ([]byte, error) {
 	tag, err := r.ReadByte()
 	if err != nil {
 		return nil, eofAsClosed(err)
@@ -79,18 +80,42 @@ func readFrame(r *bufio.Reader, max int) ([]byte, error) {
 			length = length<<8 | int(b)
 		}
 	}
-	if length < 0 || length > max {
-		return nil, fmt.Errorf("ldap: a message claiming %d bytes, and the limit is %d", length, max)
+	if length < 0 || length > limit {
+		return nil, fmt.Errorf("ldap: a message claiming %d bytes, and the limit is %d", length, limit)
 	}
 
-	// Only now is anything reserved, and it is exactly what was claimed.
-	out := make([]byte, len(header)+length)
+	// ⛔ The claim is checked, and then NOT reserved. Passing the limit says
+	// only that the claim is allowed; it says nothing about whether the bytes
+	// will ever come. Reserving all of it here turned six bytes from an
+	// unauthenticated client into four mebibytes held for as long as that
+	// client stayed silent -- fifty connections, 300 bytes, 200 MiB.
+	//
+	// So the buffer starts small and grows only once what it holds has
+	// ARRIVED, at most doubling each time: what is held is never more than
+	// twice what was received (or frameChunk, whichever is larger). A client
+	// that wants this process to hold four mebibytes has to send them.
+	out := make([]byte, len(header), len(header)+min(length, frameChunk))
 	copy(out, header)
-	if _, err := io.ReadFull(r, out[len(header):]); err != nil {
-		return nil, eofAsClosed(err)
+	for remaining := length; remaining > 0; {
+		if len(out) == cap(out) {
+			out = slices.Grow(out, min(remaining, max(len(out), frameChunk)))
+		}
+		n := min(remaining, cap(out)-len(out))
+		got, err := io.ReadFull(r, out[len(out):len(out)+n])
+		out = out[:len(out)+got]
+		if err != nil {
+			return nil, eofAsClosed(err)
+		}
+		remaining -= got
 	}
 	return out, nil
 }
+
+// frameChunk is the most readFrame reserves ahead of bytes it has not yet
+// received. It is the size of one ordinary request with room to spare, so
+// the messages a directory mostly sees -- binds, searches, their controls --
+// are read in one step and never regrown.
+const frameChunk = 4 << 10
 
 func eofAsClosed(err error) error {
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
