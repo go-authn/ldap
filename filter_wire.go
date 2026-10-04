@@ -51,7 +51,16 @@ const (
 const maxFilterDepth = 96
 
 // DecodeFilter reads a Filter from its BER packet.
-func DecodeFilter(p *ber.Packet) (Filter, error) { return decodeFilter(p, 0) }
+func DecodeFilter(p *ber.Packet) (Filter, error) {
+	f, err := decodeFilter(p, 0)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkNames(f); err != nil {
+		return nil, err
+	}
+	return f, nil
+}
 
 func decodeFilter(p *ber.Packet, depth int) (Filter, error) {
 	if p == nil {
