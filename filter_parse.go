@@ -24,6 +24,9 @@ func ParseFilter(s string) (Filter, error) {
 	if p.pos != len(p.s) {
 		return nil, fmt.Errorf("ldap: trailing %q after the filter", p.s[p.pos:])
 	}
+	if err := checkNames(f); err != nil {
+		return nil, err
+	}
 	return f, nil
 }
 

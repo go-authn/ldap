@@ -73,6 +73,17 @@ The tests assert that as a property: a filter must answer the same about every
 entry in a corpus after a round trip through the string form *and* through the
 wire.
 
+That promise held only for names that are names. An attribute was taken from
+the wire as raw octets and written back as it came, so a present filter on
+the "attribute" `!x` printed as `(!x=*)`, which reads back as a NOT. A
+consumer that logs a filter, or hands its string to another directory, would
+have been handed a different question. Both `DecodeFilter` and `ParseFilter`
+now refuse any attribute that is not an RFC 4512 §2.5 attribute description,
+and any matching rule that is not an OID. RFC 4511 §4.1.4 already constrained
+both. `FuzzMessage` found it in under two seconds and keeps the input as a
+seed. It runs every message a client may send through the frame, the
+decoders and that round trip, and its seeds run with every `go test`.
+
 **Types that carry the protocol.** `Result` has `MatchedDN` and `Diagnostic`
 as fields, because RFC 4511 4.1.9 says every result does. A server that cannot
 set `MatchedDN` cannot tell a client how far along a DN its search base
