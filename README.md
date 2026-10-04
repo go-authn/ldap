@@ -43,7 +43,16 @@ server honours, under `supportedControl`, `supportedFeatures`,
 `supportedExtension` and `supportedSASLMechanisms`. Advertising a control
 nothing honours sends a client down a path that silently does the wrong
 thing; honouring one never advertised means a client that discovers
-capabilities properly will never ask. No cgo, no client, no global state.
+capabilities properly will never ask. No cgo and no global state; package
+`ldap` holds no client (the wire client the tests drive is `ldaptest`).
+
+A `Server` is a set of handlers (`Bind`, `SASL`, `Search`, `Compare`,
+`Extended`, `Add`, `Modify`, `Delete`, `ModifyDN`, `Abandon`), served with
+`Serve(ln)` or `ListenAndServe(addr)`. `TLSConfig` makes StartTLS available;
+**`RequireTLS`** refuses every operation on a connection that is not protected,
+with `confidentialityRequired`. StartTLS is asked for by the CLIENT, so a server
+that merely offers it has promised nothing: a client that does not ask sends
+its bind password in the clear. `RequireTLS` turns the offer into a guarantee.
 
 It exists because [go-authn/authnd](https://github.com/go-authn/authnd) was
 built on a fork of `glauth/ldap`, and six defects turned up in the parts of it
