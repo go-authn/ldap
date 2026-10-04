@@ -83,9 +83,18 @@ how a client reconciles a group membership.
 **Bounded before it is trusted.** The frame length is read here rather than
 left to the BER library, whose limit is a package-level global that two
 servers in one process cannot set differently. A five-byte header claiming
-four gigabytes is refused before anything is reserved for it, and filter
-nesting is bounded because a stack overflow in Go kills the *process* — one
-unauthenticated packet must not take the directory down.
+four gigabytes is refused before anything is reserved for it (`MaxMessageSize`,
+4 MiB by default), and filter nesting is bounded because a stack overflow in
+Go kills the *process* — one unauthenticated packet must not take the
+directory down.
+
+Under that limit the body is read into a buffer that grows with what has
+actually arrived, so a length prefix on its own reserves nothing. And a
+connection is closed when a whole message has not arrived within
+`IdleTimeout` of the previous one: **five minutes** by default
+(`DefaultIdleTimeout`), a negative value for never. A client that sends a
+length prefix and then nothing is closed on the same clock as one that sends
+nothing at all.
 
 ## Status
 
@@ -93,10 +102,10 @@ The server answers binds (simple and SASL), searches, compares, extended
 operations, StartTLS, abandon, the **root DSE**, all four writes, **paged
 results** (RFC 2696) and the **read entry controls** (RFC 4527).
 
-Coverage is **99.7%**, and the three missing lines are named rather than
-rounded away: the `EncodeFilter` error branch in `ldaptest`'s `Search`
-(`Filter` is a sealed interface and `EncodeFilter` is total over the nine
-types that satisfy it), and the two branches that handle `crypto/rand`
+Coverage is **99.8%** (the CI floor is 99.7%), and the three missing lines
+are named rather than rounded away: the `EncodeFilter` error branch in
+`ldaptest`'s `Search` (`Filter` is a sealed interface and `EncodeFilter` is
+total over the ten types that satisfy it), and the two branches that handle `crypto/rand`
 failing while making a paging cookie. Reaching those two would mean adding an
 injection point for the sake of a number. They are kept because a cookie that
 cannot be made must not be silently skipped — an empty cookie means "last
@@ -128,10 +137,14 @@ against the code when the code moves, not when somebody notices.
 
 ## The judge
 
-OpenLDAP's own `ldapsearch` is the judge in CI, in **every** lane that runs
-tests. A server tested only by a client from this same module can agree with
-it about a misreading of the protocol and both be wrong — which is exactly
-how the substring bug went unnoticed.
+OpenLDAP's own `ldapsearch` is the judge in CI, and **required** in every lane
+that installs it: the Linux test lane, the race detector and coverage, where
+`LDAP_REQUIRE_JUDGE=1` turns a missing client into a failure. macOS runs it
+where the system ships it, Windows has none and skips those tests, and the
+cross-architecture lanes neither install nor require it. A server tested only
+by a client from this same module can agree with it about a misreading of the
+protocol and both be wrong — which is exactly how the substring bug went
+unnoticed.
 
 `ldaptest` is the wire client in this module, and it is deliberately **not**
 the judge: it is for the questions `ldapsearch` cannot ask, all about one
