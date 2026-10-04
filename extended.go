@@ -15,6 +15,17 @@ const oidNoticeOfDisconnection = "1.3.6.1.4.1.1466.20036"
 
 // extended answers an extended operation that is not StartTLS.
 func (c *conn) extended(ctx context.Context, m *message, req *ExtendedRequest) {
+	// ⛔ The same confidentiality gate operation() applies. StartTLS never
+	// gets here (dispatch answers it), so this cannot hide the one way out.
+	// Without it, a password modify -- old and new password in its value --
+	// reached the Extender in the clear on a listener that "requires TLS"
+	// (found by a security audit).
+	if c.srv.RequireTLS && !c.encrypted() {
+		c.send(extendedResponse(m.id, ExtendedResult{
+			Result: Refuse(ConfidentialityRequired, "this listener requires TLS, and nothing asked for it"),
+		}))
+		return
+	}
 	if req.Name == OIDWhoAmI {
 		// RFC 4532. It is answered here rather than by a handler because the
 		// answer is the CONNECTION's state, which no handler holds: "who do

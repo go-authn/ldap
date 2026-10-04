@@ -435,3 +435,46 @@ func selfSigned(t *testing.T) *tls.Config {
 	}
 	return &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}}
 }
+
+// ⛔ RequireTLS covers extended operations too. They were dispatched straight
+// to the Extender, past the confidentiality gate that every other operation
+// goes through, so a password-modify request -- old and new password in its
+// value -- was handed to the handler in the clear on a listener that
+// "requires TLS". Found by a security audit.
+func TestRequireTLSRefusesExtendedOperationsInTheClear(t *testing.T) {
+	ext := &extender{}
+	r := serve(t, &Server{Bind: reader(), Extended: ext, TLSConfig: selfSigned(t), RequireTLS: true})
+	c := dial(t, r)
+	defer c.Close()
+
+	op := ber.Encode(ber.ClassApplication, ber.TypeConstructed, appExtendedRequest, nil, "extendedReq")
+	op.AppendChild(ber.NewString(ber.ClassContext, ber.TypePrimitive, tagExtRequestName, OIDPasswordModify, "requestName"))
+	op.AppendChild(ber.NewString(ber.ClassContext, ber.TypePrimitive, tagExtRequestValue, "hunter2", "requestValue"))
+	c.write(t, c.next(), op)
+	if res := resultOf(t, c.read(t)); res.Code != ConfidentialityRequired {
+		t.Errorf("a password modify in the clear answered %s", res.Code)
+	}
+	if ext.seen != nil {
+		t.Errorf("the extender was handed %q in the clear", ext.seen.Value)
+	}
+	if _, code := c.whoami(t); code != ConfidentialityRequired {
+		t.Errorf("WhoAmI in the clear answered %s", code)
+	}
+
+	// StartTLS itself is still offered, and after it the same request arrives.
+	if code := c.startTLS(t); code != Success {
+		t.Fatalf("StartTLS answered %s", code)
+	}
+	tc := tls.Client(c.c, &tls.Config{InsecureSkipVerify: true})
+	if err := tc.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	c.upgrade(tc)
+	c.write(t, c.next(), op)
+	if res := resultOf(t, c.read(t)); res.Code != Success {
+		t.Errorf("after StartTLS the password modify answered %s", res.Code)
+	}
+	if ext.seen == nil {
+		t.Error("after StartTLS the extender was not reached")
+	}
+}
