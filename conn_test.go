@@ -478,3 +478,52 @@ func TestRequireTLSRefusesExtendedOperationsInTheClear(t *testing.T) {
 		t.Error("after StartTLS the extender was not reached")
 	}
 }
+
+// ⛔ An operation ends when its final response is sent. A client that has
+// read the response and at once asks for StartTLS must get it, even while
+// the operation's goroutine is still on its way out. The hook holds every
+// goroutine for a while after its response is written -- the window the 386
+// lane hit by accident, where StartTLS answered "1 operations are still in
+// flight" for a search the client had already seen finish.
+func TestStartTLSRightAfterAResponseIsNotRefused(t *testing.T) {
+	testHookAfterFinalSend = func() { time.Sleep(200 * time.Millisecond) }
+	t.Cleanup(func() { testHookAfterFinalSend = nil })
+	cfg := selfSigned(t)
+	r := serve(t, &Server{Bind: reader(), Search: &directory{entries: people("alice")}, TLSConfig: cfg})
+	c := dial(t, r)
+	defer c.Close()
+	if _, res := c.search(t, "(uid=*)"); res.Code != Success {
+		t.Fatalf("search answered %s", res.Code)
+	}
+	if code := c.startTLS(t); code != Success {
+		t.Fatalf("StartTLS right after a finished search answered %s", code)
+	}
+}
+
+// The other side of the same rule: an operation whose final response has
+// NOT gone out is still outstanding, and StartTLS is refused while it is.
+func TestFinalResponseKnowsWhatIsFinal(t *testing.T) {
+	final := func(id int, tag ber.Tag) bool {
+		_, ok := finalResponse(resultMessage(id, tag, Result{Code: Success}))
+		return ok
+	}
+	if !final(3, appSearchResDone) || !final(3, appExtendedResponse) {
+		t.Error("a SearchResultDone or an ExtendedResponse is final")
+	}
+	if final(3, appSearchResEntry) || final(3, appSearchResRef) || final(3, appIntermediateResponse) {
+		t.Error("an entry, a reference or an intermediate response is followed by more")
+	}
+	if final(0, appExtendedResponse) {
+		t.Error("message id 0 is an unsolicited notice, which answers no operation")
+	}
+	// Not an LDAPMessage at all: an id alone, or an operation that is not an
+	// application-tagged protocol op.
+	if _, ok := finalResponse(newMessage(3)); ok {
+		t.Error("a message with no operation is not a final response")
+	}
+	odd := newMessage(3)
+	odd.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "x", "notAnOp"))
+	if _, ok := finalResponse(odd); ok {
+		t.Error("a universal-class element is not a protocol operation")
+	}
+}
