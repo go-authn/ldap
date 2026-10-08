@@ -253,7 +253,21 @@ func (c *conn) send(p *ber.Packet) {
 	}
 	c.mu.Lock()
 	w := c.raw
+	// ⛔ An operation stops being outstanding when its FINAL response goes
+	// out, not when its goroutine returns. A client that has read the
+	// response may at once ask for StartTLS, which RFC 4511 4.14.1 refuses
+	// while anything is outstanding: had the id been dropped only on return,
+	// that StartTLS was refused with "1 operations are still in flight" for
+	// an operation the client had already seen finish. It was, on the 386 CI
+	// lane, whenever the goroutine was slower to return than the client to
+	// ask. Dropped here, under wmu, before the bytes can reach anybody.
+	if id, final := finalResponse(p); final {
+		delete(c.inflight, id)
+	}
 	c.mu.Unlock()
+	if testHookAfterFinalSend != nil {
+		defer testHookAfterFinalSend()
+	}
 	if _, err := w.Write(p.Bytes()); err != nil {
 		// The client went away mid-answer. Closing here stops the rest of
 		// the operation writing into a socket nobody is reading.
@@ -387,4 +401,32 @@ func taggedInteger(p *ber.Packet) (int64, bool) {
 func isTimeout(err error) bool {
 	var ne net.Error
 	return errors.As(err, &ne) && ne.Timeout()
+}
+
+// testHookAfterFinalSend, when set by a test, runs after a response is
+// written, before the operation's goroutine returns: the window in which the
+// client already holds the response and the server still holds the goroutine.
+var testHookAfterFinalSend func()
+
+// finalResponse reports whether p ends the operation it answers, and its
+// message id. Search entries, search references and intermediate responses
+// (RFC 4511 4.13) are followed by more; message id 0 is an unsolicited
+// notice, which answers no operation.
+func finalResponse(p *ber.Packet) (int, bool) {
+	if len(p.Children) < 2 {
+		return 0, false
+	}
+	id, ok := p.Children[0].Value.(int64)
+	if !ok || id == 0 {
+		return 0, false
+	}
+	op := p.Children[1]
+	if op.ClassType != ber.ClassApplication {
+		return 0, false
+	}
+	switch op.Tag {
+	case appSearchResEntry, appSearchResRef, appIntermediateResponse:
+		return 0, false
+	}
+	return int(id), true
 }

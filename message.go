@@ -32,6 +32,8 @@ const (
 	appSearchResRef     = 19
 	appExtendedRequest  = 23
 	appExtendedResponse = 24
+	// appIntermediateResponse is [APPLICATION 25] (RFC 4511 4.13): more follows.
+	appIntermediateResponse = 25
 )
 
 // The context tags inside a BindRequest and its response.
