@@ -1,0 +1,20 @@
+# Two definitions of OpenLDAP's that no RFC makes, and that this library
+# needs. Both are copied from the OpenLDAP source at commit
+# dfea404feae1aa6b1d2c1be6271d5900f9af4c4f (2026-10-11):
+# https://github.com/openldap/openldap/blob/master/servers/slapd/
+
+# servers/slapd/schema_prep.c. The root DSE of this library has been
+# "objectClass: top, OpenLDAProotDSE" since it was written, and a published
+# class must be a defined class.
+objectclass ( 1.3.6.1.4.1.4203.1.4.1 NAME ( 'OpenLDAProotDSE' 'LDAProotDSE' )
+	DESC 'OpenLDAP Root DSE object'
+	SUP top STRUCTURAL MAY cn )
+
+# servers/slapd/schema_init.c. RFC 2307 names it as the SUBSTR rule of
+# memberUid, memberNisNetgroup and nisMapEntry and no RFC defines it; RFC
+# 4517 has caseIgnoreIA5SubstringsMatch and no case-exact counterpart.
+#
+# ⛔ Its SYNTAX is OpenLDAP's: IA5 String (1.3.6.1.4.1.1466.115.121.1.26),
+# where the RFC 4517 substrings rules all have Substring Assertion (...1.58).
+matchingrule ( 1.3.6.1.4.1.4203.1.2.1 NAME 'caseExactIA5SubstringsMatch'
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 )

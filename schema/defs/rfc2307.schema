@@ -1,0 +1,303 @@
+# RFC 2307: An Approach for Using LDAP as a Network Information Service.
+# https://www.rfc-editor.org/rfc/rfc2307.txt, read 2026-10-12.
+#
+# ⛔ RFC 2307 predates RFC 4512 and its definitions are NOT in RFC 4512's
+# form, so they could not be copied as they are. They were TRANSCRIBED by
+# these mechanical substitutions, and by nothing else:
+#
+#   - the OID macro "nisSchema." is 1.3.6.1.1.1. (RFC 2307 2.1);
+#   - SUBSTRINGS is the RFC 2252 spelling of SUBSTR;
+#   - the quoted syntax names are their OIDs: 'INTEGER' is
+#     1.3.6.1.4.1.1466.115.121.1.27, 'IA5String' is ...1.26 (with the same
+#     {bound}), and the two syntaxes of 2.4 are 1.3.6.1.1.1.0.0 and 0.1;
+#   - in the object classes, "SUP top KIND" moves after DESC, where RFC 4512
+#     4.1.1 puts it;
+#   - the two syntaxes of 2.4 lose their NAME, which a SyntaxDescription
+#     does not have (RFC 4512 4.1.5);
+#   - an apostrophe inside a DESC ("service's") is written \27, as RFC 4512
+#     4.1 requires: as printed, it closes the string;
+#   - "nisSchema.2.09" (nisMap) is 1.3.6.1.1.1.2.9: a number may not have a
+#     leading zero (RFC 4512 1.4), and every implementation reads it as 9;
+#   - shadowAccount's MAY list is missing a '$' between shadowMin and
+#     shadowMax in the RFC; it is put back.
+#
+# memberUid, memberNisNetgroup and nisMapEntry name the SUBSTR rule
+# caseExactIA5SubstringsMatch, which no RFC defines. OpenLDAP does
+# (1.3.6.1.4.1.4203.1.2.1, schema_init.c); it is in openldap.schema.
+#
+# RFC 2307 erratum 462 (held for document update) concerns ipProtocol; the
+# RFC text is kept.
+#
+# rfc2307bis (an expired draft) makes posixGroup AUXILIARY and adds
+# uniqueMember to it. That is NOT what RFC 2307 says and is not done here.
+#
+# Compared with OpenLDAP's nis.schema (commit
+# dfea404feae1aa6b1d2c1be6271d5900f9af4c4f), ignoring DESC, the transcribed
+# definitions are the same, which is some evidence the transcription is
+# right: nis.schema was made from the same RFC by somebody else.
+
+# RFC 2307, section 2.4 Syntax definitions
+ldapsyntax ( 1.3.6.1.1.1.0.0
+	  DESC 'NIS netgroup triple' )
+
+# RFC 2307, section 2.4 Syntax definitions
+ldapsyntax ( 1.3.6.1.1.1.0.1
+	  DESC 'Boot parameter' )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.0 NAME 'uidNumber'
+	  DESC 'An integer uniquely identifying a user in an
+	        administrative domain'
+	  EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.1 NAME 'gidNumber'
+	  DESC 'An integer uniquely identifying a group in an
+	        administrative domain'
+	  EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.2 NAME 'gecos'
+	  DESC 'The GECOS field; the common name'
+	  EQUALITY caseIgnoreIA5Match
+	  SUBSTR caseIgnoreIA5SubstringsMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 SINGLE-VALUE )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.3 NAME 'homeDirectory'
+	  DESC 'The absolute path to the home directory'
+	  EQUALITY caseExactIA5Match
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 SINGLE-VALUE )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.4 NAME 'loginShell'
+	  DESC 'The path to the login shell'
+	  EQUALITY caseExactIA5Match
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 SINGLE-VALUE )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.5 NAME 'shadowLastChange'
+	  EQUALITY integerMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.6 NAME 'shadowMin'
+	  EQUALITY integerMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.7 NAME 'shadowMax'
+	  EQUALITY integerMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.8 NAME 'shadowWarning'
+	  EQUALITY integerMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.9 NAME 'shadowInactive'
+	  EQUALITY integerMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.10 NAME 'shadowExpire'
+	  EQUALITY integerMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.11 NAME 'shadowFlag'
+	  EQUALITY integerMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.12 NAME 'memberUid'
+	  EQUALITY caseExactIA5Match
+	  SUBSTR caseExactIA5SubstringsMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.13 NAME 'memberNisNetgroup'
+	  EQUALITY caseExactIA5Match
+	  SUBSTR caseExactIA5SubstringsMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.14 NAME 'nisNetgroupTriple'
+	  DESC 'Netgroup triple'
+	  SYNTAX 1.3.6.1.1.1.0.0 )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.15 NAME 'ipServicePort'
+	  EQUALITY integerMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.16 NAME 'ipServiceProtocol'
+	  SUP name )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.17 NAME 'ipProtocolNumber'
+	  EQUALITY integerMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.18 NAME 'oncRpcNumber'
+	  EQUALITY integerMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.19 NAME 'ipHostNumber'
+	  DESC 'IP address as a dotted decimal, eg. 192.168.1.1,
+	        omitting leading zeros'
+	  EQUALITY caseIgnoreIA5Match
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.26{128} )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.20 NAME 'ipNetworkNumber'
+	  DESC 'IP network as a dotted decimal, eg. 192.168,
+	        omitting leading zeros'
+	  EQUALITY caseIgnoreIA5Match
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.26{128} SINGLE-VALUE )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.21 NAME 'ipNetmaskNumber'
+	  DESC 'IP netmask as a dotted decimal, eg. 255.255.255.0,
+	        omitting leading zeros'
+	  EQUALITY caseIgnoreIA5Match
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.26{128} SINGLE-VALUE )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.22 NAME 'macAddress'
+	  DESC 'MAC address in maximal, colon separated hex
+	        notation, eg. 00:00:92:90:ee:e2'
+	  EQUALITY caseIgnoreIA5Match
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.26{128} )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.23 NAME 'bootParameter'
+	  DESC 'rpc.bootparamd parameter'
+	  SYNTAX 1.3.6.1.1.1.0.1 )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.24 NAME 'bootFile'
+	  DESC 'Boot image name'
+	  EQUALITY caseExactIA5Match
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.26 NAME 'nisMapName'
+	  SUP name )
+
+# RFC 2307, section 3 Attribute definitions
+attributetype ( 1.3.6.1.1.1.1.27 NAME 'nisMapEntry'
+	  EQUALITY caseExactIA5Match
+	  SUBSTR caseExactIA5SubstringsMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.26{1024} SINGLE-VALUE )
+
+# RFC 2307, section 4 Class definitions
+objectclass ( 1.3.6.1.1.1.2.0 NAME 'posixAccount'
+	  DESC 'Abstraction of an account with POSIX attributes'
+	  SUP top AUXILIARY
+	  MUST ( cn $ uid $ uidNumber $ gidNumber $ homeDirectory )
+	  MAY ( userPassword $ loginShell $ gecos $ description ) )
+
+# RFC 2307, section 4 Class definitions
+objectclass ( 1.3.6.1.1.1.2.1 NAME 'shadowAccount'
+	  DESC 'Additional attributes for shadow passwords'
+	  SUP top AUXILIARY
+	  MUST uid
+	  MAY ( userPassword $ shadowLastChange $ shadowMin $
+	        shadowMax $ shadowWarning $ shadowInactive $
+	        shadowExpire $ shadowFlag $ description ) )
+
+# RFC 2307, section 4 Class definitions
+objectclass ( 1.3.6.1.1.1.2.2 NAME 'posixGroup'
+	  DESC 'Abstraction of a group of accounts'
+	  SUP top STRUCTURAL
+	  MUST ( cn $ gidNumber )
+	  MAY ( userPassword $ memberUid $ description ) )
+
+# RFC 2307, section 4 Class definitions
+objectclass ( 1.3.6.1.1.1.2.3 NAME 'ipService'
+	  DESC 'Abstraction an Internet Protocol service.
+	        Maps an IP port and protocol (such as tcp or udp)
+	        to one or more names; the distinguished value of
+	        the cn attribute denotes the service\27s canonical
+	        name'
+	  SUP top STRUCTURAL
+	  MUST ( cn $ ipServicePort $ ipServiceProtocol )
+	  MAY ( description ) )
+
+# RFC 2307, section 4 Class definitions
+objectclass ( 1.3.6.1.1.1.2.4 NAME 'ipProtocol'
+	  DESC 'Abstraction of an IP protocol. Maps a protocol number
+	        to one or more names. The distinguished value of the cn
+	        attribute denotes the protocol\27s canonical name'
+	  SUP top STRUCTURAL
+	  MUST ( cn $ ipProtocolNumber $ description )
+	  MAY description )
+
+# RFC 2307, section 4 Class definitions
+objectclass ( 1.3.6.1.1.1.2.5 NAME 'oncRpc'
+	  DESC 'Abstraction of an Open Network Computing (ONC)
+	       [RFC1057] Remote Procedure Call (RPC) binding.
+	       This class maps an ONC RPC number to a name.
+	       The distinguished value of the cn attribute denotes
+	       the RPC service\27s canonical name'
+	  SUP top STRUCTURAL
+	  MUST ( cn $ oncRpcNumber $ description )
+	  MAY description )
+
+# RFC 2307, section 4 Class definitions
+objectclass ( 1.3.6.1.1.1.2.6 NAME 'ipHost'
+	  DESC 'Abstraction of a host, an IP device. The distinguished
+	        value of the cn attribute denotes the host\27s canonical
+	        name. Device SHOULD be used as a structural class'
+	  SUP top AUXILIARY
+	  MUST ( cn $ ipHostNumber )
+	  MAY ( l $ description $ manager ) )
+
+# RFC 2307, section 4 Class definitions
+objectclass ( 1.3.6.1.1.1.2.7 NAME 'ipNetwork'
+	  DESC 'Abstraction of a network. The distinguished value of
+	        the cn attribute denotes the network\27s canonical name'
+	  SUP top STRUCTURAL
+	  MUST ( cn $ ipNetworkNumber )
+	  MAY ( ipNetmaskNumber $ l $ description $ manager ) )
+
+# RFC 2307, section 4 Class definitions
+objectclass ( 1.3.6.1.1.1.2.8 NAME 'nisNetgroup'
+	  DESC 'Abstraction of a netgroup. May refer to other netgroups'
+	  SUP top STRUCTURAL
+	  MUST cn
+	  MAY ( nisNetgroupTriple $ memberNisNetgroup $ description ) )
+
+# RFC 2307, section 4 Class definitions
+objectclass ( 1.3.6.1.1.1.2.9 NAME 'nisMap'
+	  DESC 'A generic abstraction of a NIS map'
+	  SUP top STRUCTURAL
+	  MUST nisMapName
+	  MAY description )
+
+# RFC 2307, section 4 Class definitions
+objectclass ( 1.3.6.1.1.1.2.10 NAME 'nisObject'
+	  DESC 'An entry in a NIS map'
+	  SUP top STRUCTURAL
+	  MUST ( cn $ nisMapEntry $ nisMapName )
+	  MAY description )
+
+# RFC 2307, section 4 Class definitions
+objectclass ( 1.3.6.1.1.1.2.11 NAME 'ieee802Device'
+	  DESC 'A device with a MAC address; device SHOULD be
+	        used as a structural class'
+	  SUP top AUXILIARY
+	  MAY macAddress )
+
+# RFC 2307, section 4 Class definitions
+objectclass ( 1.3.6.1.1.1.2.12 NAME 'bootableDevice'
+	  DESC 'A device with boot parameters; device SHOULD be
+	        used as a structural class'
+	  SUP top AUXILIARY
+	  MAY ( bootFile $ bootParameter ) )
+

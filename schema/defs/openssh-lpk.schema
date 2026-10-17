@@ -1,0 +1,35 @@
+# openssh-lpk: the LDAP Public Key schema, by Eric Auge, after a proposal by
+# Mark Ruijter. Not an RFC; it is the schema sshd's AuthorizedKeysCommand
+# helpers read, and authnd publishes sshPublicKey.
+#
+# Read from the project's own repository, as archived by Google Code:
+# https://storage.googleapis.com/google-code-archive-source/v2/code.google.com/openssh-lpk/source-archive.zip
+# file openssh-lpk/trunk/schemas/openssh-lpk_openldap.schema, read 2026-10-12.
+# The OIDs are under 1.3.6.1.4.1.24552, the private enterprise number the
+# file uses; the attribute is ...500.1.1.1.13 and the class ...500.1.1.2.0.
+#
+# ⛔ Three versions of this class are in circulation, all with these OIDs:
+#
+#   - upstream (above):              MAY ( sshPublicKey $ uid )
+#   - some copies, e.g. github.com/AndriiGrytsenko/openssh-ldap-publickey
+#     misc/openssh-lpk-openldap.schema:  MUST ( sshPublicKey $ uid )
+#   - github.com/jirutka/ssh-ldap-pubkey etc/openssh-lpk.schema (changed
+#     2016-10-01):                   MUST uid MAY sshPublicKey
+#
+# The upstream one is what is here. A client that cached one of the others
+# disagrees with it about which attributes are required, and nothing on the
+# wire says which one a server means except this definition, which is why it
+# is published.
+#
+# Only the order differs from the file: it puts DESC after "SUP top
+# AUXILIARY", and RFC 4512 4.1.1 puts it before.
+
+attributetype ( 1.3.6.1.4.1.24552.500.1.1.1.13 NAME 'sshPublicKey'
+	DESC 'MANDATORY: OpenSSH Public key'
+	EQUALITY octetStringMatch
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.40 )
+
+objectclass ( 1.3.6.1.4.1.24552.500.1.1.2.0 NAME 'ldapPublicKey'
+	DESC 'MANDATORY: OpenSSH LPK objectclass'
+	SUP top AUXILIARY
+	MAY ( sshPublicKey $ uid ) )

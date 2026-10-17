@@ -1,0 +1,177 @@
+# RFC 4512: LDAP Directory Information Models.
+# https://www.rfc-editor.org/rfc/rfc4512.txt, read 2026-10-12.
+#
+# Every definition below is the RFC's text, copied mechanically from the
+# section named above it (only the line indentation differs). They are the
+# directory's own: 'top', 'alias', 'subschema', 'extensibleObject', the
+# operational attributes of 3.4, the subschema attributes of 4.2 and the
+# root DSE attributes of 5.1.
+#
+# Where OpenLDAP differs (servers/slapd/schema_prep.c, read at commit
+# dfea404feae1aa6b1d2c1be6271d5900f9af4c4f) it is noted at the definition;
+# the RFC wins.
+
+# RFC 4512, section 2.4.1 Abstract Object Classes
+objectclass ( 2.5.6.0 NAME 'top' ABSTRACT MUST objectClass )
+
+# RFC 4512, section 2.6.1 'alias' Object Class
+objectclass ( 2.5.6.1 NAME 'alias'
+	  SUP top STRUCTURAL
+	  MUST aliasedObjectName )
+
+# RFC 4512, section 2.6.2 'aliasedObjectName' Attribute Type
+attributetype ( 2.5.4.1 NAME 'aliasedObjectName'
+	  EQUALITY distinguishedNameMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.12
+	  SINGLE-VALUE )
+
+# RFC 4512, section 3.3 The 'objectClass' attribute
+attributetype ( 2.5.4.0 NAME 'objectClass'
+	  EQUALITY objectIdentifierMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )
+
+# RFC 4512, section 3.4.1 'creatorsName'
+attributetype ( 2.5.18.3 NAME 'creatorsName'
+	  EQUALITY distinguishedNameMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.12
+	  SINGLE-VALUE NO-USER-MODIFICATION
+	  USAGE directoryOperation )
+
+# RFC 4512, section 3.4.2 'createTimestamp'
+attributetype ( 2.5.18.1 NAME 'createTimestamp'
+	  EQUALITY generalizedTimeMatch
+	  ORDERING generalizedTimeOrderingMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.24
+	  SINGLE-VALUE NO-USER-MODIFICATION
+	  USAGE directoryOperation )
+
+# RFC 4512, section 3.4.3 'modifiersName'
+attributetype ( 2.5.18.4 NAME 'modifiersName'
+	  EQUALITY distinguishedNameMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.12
+	  SINGLE-VALUE NO-USER-MODIFICATION
+	  USAGE directoryOperation )
+
+# RFC 4512, section 3.4.4 'modifyTimestamp'
+attributetype ( 2.5.18.2 NAME 'modifyTimestamp'
+	  EQUALITY generalizedTimeMatch
+	  ORDERING generalizedTimeOrderingMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.24
+	  SINGLE-VALUE NO-USER-MODIFICATION
+	  USAGE directoryOperation )
+
+# RFC 4512, section 3.4.5 'structuralObjectClass'
+attributetype ( 2.5.21.9 NAME 'structuralObjectClass'
+	  EQUALITY objectIdentifierMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.38
+	  SINGLE-VALUE NO-USER-MODIFICATION
+	  USAGE directoryOperation )
+
+# RFC 4512, section 3.4.6 'governingStructureRule'
+attributetype ( 2.5.21.10 NAME 'governingStructureRule'
+	  EQUALITY integerMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.27
+	  SINGLE-VALUE NO-USER-MODIFICATION
+	  USAGE directoryOperation )
+
+# RFC 4512, section 4.2 Subschema Subentries
+attributetype ( 2.5.18.10 NAME 'subschemaSubentry'
+	  EQUALITY distinguishedNameMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.12
+	  SINGLE-VALUE NO-USER-MODIFICATION
+	  USAGE directoryOperation )
+
+# RFC 4512, section 4.2 Subschema Subentries
+objectclass ( 2.5.20.1 NAME 'subschema' AUXILIARY
+	  MAY ( dITStructureRules $ nameForms $ ditContentRules $
+	    objectClasses $ attributeTypes $ matchingRules $
+	    matchingRuleUse ) )
+
+# RFC 4512, section 4.2.1 'objectClasses'
+attributetype ( 2.5.21.6 NAME 'objectClasses'
+	  EQUALITY objectIdentifierFirstComponentMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.37
+	  USAGE directoryOperation )
+
+# RFC 4512, section 4.2.2 'attributeTypes'
+attributetype ( 2.5.21.5 NAME 'attributeTypes'
+	  EQUALITY objectIdentifierFirstComponentMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.3
+	  USAGE directoryOperation )
+
+# RFC 4512, section 4.2.3 'matchingRules'
+attributetype ( 2.5.21.4 NAME 'matchingRules'
+	  EQUALITY objectIdentifierFirstComponentMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.30
+	  USAGE directoryOperation )
+
+# RFC 4512, section 4.2.4 'matchingRuleUse'
+attributetype ( 2.5.21.8 NAME 'matchingRuleUse'
+	  EQUALITY objectIdentifierFirstComponentMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.31
+	  USAGE directoryOperation )
+
+# RFC 4512, section 4.2.5 'ldapSyntaxes'
+attributetype ( 1.3.6.1.4.1.1466.101.120.16 NAME 'ldapSyntaxes'
+	  EQUALITY objectIdentifierFirstComponentMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.54
+	  USAGE directoryOperation )
+
+# RFC 4512, section 4.2.6 'dITContentRules'
+attributetype ( 2.5.21.2 NAME 'dITContentRules'
+	  EQUALITY objectIdentifierFirstComponentMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.16
+	  USAGE directoryOperation )
+
+# RFC 4512, section 4.2.7 'dITStructureRules'
+attributetype ( 2.5.21.1 NAME 'dITStructureRules'
+	  EQUALITY integerFirstComponentMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.17
+	  USAGE directoryOperation )
+
+# RFC 4512, section 4.2.8 'nameForms'
+attributetype ( 2.5.21.7 NAME 'nameForms'
+	  EQUALITY objectIdentifierFirstComponentMatch
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.35
+	  USAGE directoryOperation )
+
+# RFC 4512, section 4.3 'extensibleObject' object class
+objectclass ( 1.3.6.1.4.1.1466.101.120.111 NAME 'extensibleObject'
+	  SUP top AUXILIARY )
+
+# RFC 4512, section 5.1.1 'altServer'
+attributetype ( 1.3.6.1.4.1.1466.101.120.6 NAME 'altServer'
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.26
+	  USAGE dSAOperation )
+
+# RFC 4512, section 5.1.2 'namingContexts'
+attributetype ( 1.3.6.1.4.1.1466.101.120.5 NAME 'namingContexts'
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.12
+	  USAGE dSAOperation )
+
+# RFC 4512, section 5.1.3 'supportedControl'
+attributetype ( 1.3.6.1.4.1.1466.101.120.13 NAME 'supportedControl'
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.38
+	  USAGE dSAOperation )
+
+# RFC 4512, section 5.1.4 'supportedExtension'
+attributetype ( 1.3.6.1.4.1.1466.101.120.7 NAME 'supportedExtension'
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.38
+	  USAGE dSAOperation )
+
+# RFC 4512, section 5.1.5 'supportedFeatures'
+attributetype ( 1.3.6.1.4.1.4203.1.3.5 NAME 'supportedFeatures'
+	    EQUALITY objectIdentifierMatch
+	    SYNTAX 1.3.6.1.4.1.1466.115.121.1.38
+	    USAGE dSAOperation )
+
+# RFC 4512, section 5.1.6 'supportedLDAPVersion'
+attributetype ( 1.3.6.1.4.1.1466.101.120.15 NAME 'supportedLDAPVersion'
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.27
+	  USAGE dSAOperation )
+
+# RFC 4512, section 5.1.7 'supportedSASLMechanisms'
+attributetype ( 1.3.6.1.4.1.1466.101.120.14 NAME 'supportedSASLMechanisms'
+	  SYNTAX 1.3.6.1.4.1.1466.115.121.1.15
+	  USAGE dSAOperation )
+
