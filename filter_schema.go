@@ -101,10 +101,10 @@ func Evaluate(f Filter, e *Entry, s *schema.Schema) schema.Truth {
 			}
 		}
 		return schema.False
-	case *ExtensibleMatch:
-		return evaluateExtensible(f, e, s)
+	default:
+		// Filter is sealed, and this is the last of its ten types.
+		return evaluateExtensible(f.(*ExtensibleMatch), e, s)
 	}
-	return schema.Undefined
 }
 
 // desc is an attribute description read against a schema.
@@ -263,4 +263,15 @@ func eachAVA(e *Entry, s *schema.Schema, rule func(*schema.AttributeType, []byte
 // false to it.
 func (r *SearchRequest) Matches(e *Entry) bool {
 	return Evaluate(r.Filter, e, r.schema) == schema.True
+}
+
+// Validate checks the entry against a schema (schema.Schema.Validate): its
+// classes, its MUSTs and MAYs, SINGLE-VALUE, syntaxes and RDN. It returns
+// nil or a *schema.ValidationError naming every problem.
+func (e *Entry) Validate(s *schema.Schema) error {
+	se := schema.Entry{DN: e.DN, Attributes: make([]schema.Attribute, len(e.Attributes))}
+	for i, a := range e.Attributes {
+		se.Attributes[i] = schema.Attribute{Description: a.Name, Values: a.Values}
+	}
+	return s.Validate(se)
 }
