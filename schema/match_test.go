@@ -197,8 +197,9 @@ func TestOrderingRules(t *testing.T) {
 		{"createTimestamp", "20261012000000+0200", "20261012000000Z", True}, // two hours earlier
 		{"createTimestamp", "202610120000Z", "20261012000000.5Z", True},
 		{"createTimestamp", "nonsense", "20261012000000Z", Undefined},
-		// RFC 2307 gives uidNumber no ORDERING: (uidNumber>=1000) is Undefined.
-		{"uidNumber", "999", "1000", Undefined},
+		// uidNumber orders as an integer (rfc2307.schema says why it has the rule).
+		{"uidNumber", "999", "1000", True},
+		{"gidNumber", "10000", "9999", False},
 		// RFC 4519: serialNumber... has none either; title has none.
 		{"title", "a", "b", Undefined},
 	} {

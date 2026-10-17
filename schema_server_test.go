@@ -74,8 +74,9 @@ func TestEvaluateWithASchema(t *testing.T) {
 		{"(mail=*)", schema.False},
 		{"(cn;lang-de=*)", schema.False},
 		{"(uid~=Alice)", schema.True},
-		{"(uidNumber>=1000)", schema.Undefined}, // RFC 2307: uidNumber has no ORDERING
-		{"(uidNumber<=1000)", schema.Undefined},
+		{"(uidNumber>=1000)", schema.False}, // as integers: 999 < 1000 (slapd's and rfc2307bis's ORDERING)
+		{"(uidNumber<=1000)", schema.True},
+		{"(uid>=a)", schema.Undefined},                      // uid has no ORDERING (RFC 4519)
 		{"(createTimestamp>=20260101000000Z)", schema.True}, // generalizedTimeOrderingMatch
 		{"(createTimestamp>=20270101000000Z)", schema.False},
 		{"(createTimestamp<=20261012000000Z)", schema.True}, // by EQUALITY
@@ -292,7 +293,7 @@ func TestTheServerFiltersWithTheSchema(t *testing.T) {
 		{"(name=carol  smith)", "carol"},
 		{"(!(uidNumber:integerOrderingMatch:=1000))", "bob carol"},
 		{"(uidNumber:integerOrderingMatch:=1000)", "alice"},
-		{"(uidNumber>=1000)", ""}, // Undefined: RFC 2307 gives uidNumber no ORDERING
+		{"(uidNumber>=1000)", "bob carol"}, // integers: 999 < 1000 <= 10000, not strings
 		{"(shoeSize=12)", ""},
 		{"(!(shoeSize=12))", ""},
 		{"(uid:nonsenseMatch:=x)", ""}, // Undefined, not inappropriateMatching

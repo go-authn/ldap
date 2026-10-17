@@ -77,8 +77,12 @@ func TestAttributeTypesInheritThroughSUP(t *testing.T) {
 	if !cn.IsA(name) || name.IsA(cn) || cn.Name() != "cn" {
 		t.Error("IsA is wrong")
 	}
-	if s.AttributeType("uidNumber").OrderingRule() != nil {
-		t.Error("RFC 2307 gives uidNumber no ORDERING rule")
+	// The embedded rfc2307.schema's one departure: ORDERING, as slapd and
+	// rfc2307bis have it.
+	for _, n := range []string{"uidNumber", "gidNumber"} {
+		if s.AttributeType(n).OrderingRule() != s.MatchingRule("integerOrderingMatch") {
+			t.Errorf("%s has no integerOrderingMatch", n)
+		}
 	}
 	if (&AttributeType{OID: "1.2"}).Name() != "1.2" || (&ObjectClass{OID: "1.3"}).Name() != "1.3" || s.MatchingRule("2.5.13.2").Name() != "caseIgnoreMatch" {
 		t.Error("Name")

@@ -21,6 +21,15 @@
 #   - shadowAccount's MAY list is missing a '$' between shadowMin and
 #     shadowMax in the RFC; it is put back.
 #
+# ⛔ ONE DEPARTURE FROM THE RFC TEXT, on purpose: uidNumber and gidNumber get
+# ORDERING integerOrderingMatch. RFC 2307 gives them EQUALITY only, which makes
+# (uidNumber>=1000) Undefined (RFC 4511 4.5.1.7.3) -- and that is the filter
+# SSSD builds from ldap_min_id/ldap_max_id. Every reference implementation
+# has the rule: slapd defines both types itself, with it, and comments them
+# out of nis.schema ("builtin", servers/slapd/schema_prep.c), and
+# draft-howard-rfc2307bis-02 section 2.1 defines them with it. Without it this
+# server would answer a range query no other server leaves Undefined.
+#
 # memberUid, memberNisNetgroup and nisMapEntry name the SUBSTR rule
 # caseExactIA5SubstringsMatch, which no RFC defines. OpenLDAP does
 # (1.3.6.1.4.1.4203.1.2.1, schema_init.c); it is in openldap.schema.
@@ -48,13 +57,13 @@ ldapsyntax ( 1.3.6.1.1.1.0.1
 attributetype ( 1.3.6.1.1.1.1.0 NAME 'uidNumber'
 	  DESC 'An integer uniquely identifying a user in an
 	        administrative domain'
-	  EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+	  EQUALITY integerMatch ORDERING integerOrderingMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
 
 # RFC 2307, section 3 Attribute definitions
 attributetype ( 1.3.6.1.1.1.1.1 NAME 'gidNumber'
 	  DESC 'An integer uniquely identifying a group in an
 	        administrative domain'
-	  EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
+	  EQUALITY integerMatch ORDERING integerOrderingMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )
 
 # RFC 2307, section 3 Attribute definitions
 attributetype ( 1.3.6.1.1.1.1.2 NAME 'gecos'

@@ -207,12 +207,15 @@ was; nothing changes for a deployment that does not set it.
   `req.Matches(e)`, which uses the same schema; `req.Filter.Matches(e)`
   compares strings and may leave out an entry the schema would match.
 
-⛔ **`(uidNumber>=1000)` is Undefined with the standard schema**, at slapd as
-here: RFC 2307 gives `uidNumber` an EQUALITY rule and no ORDERING rule, and
-RFC 4511 4.5.1.7.3 makes a greaterOrEqual with no ORDERING rule Undefined. To
-compare uidNumbers as integers ask
-`(!(uidNumber:integerOrderingMatch:=1000))`, or give the type an ORDERING
-rule in a deployment's own definitions.
+⛔ **`(uidNumber>=1000)` compares integers**, and that is the one place the
+embedded definitions depart from their RFC. RFC 2307 gives `uidNumber` and
+`gidNumber` an EQUALITY rule and no ORDERING rule, which would make every
+range filter on them Undefined (RFC 4511 4.5.1.7.3) — including the one SSSD
+builds from `ldap_min_id`/`ldap_max_id`. slapd defines both types itself WITH
+`ORDERING integerOrderingMatch` (`servers/slapd/schema_prep.c`; nis.schema
+comments them out as "builtin"), and so does draft-howard-rfc2307bis-02, so
+this follows them. An attribute with no ORDERING rule at all, such as `uid`,
+still makes `>=` Undefined.
 
 **What is deliberately not there.**
 
