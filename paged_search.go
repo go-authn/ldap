@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+
+	"github.com/go-authn/ldap/schema"
 )
 
 // DefaultMaxPagedSearches is how many paged searches one connection may hold
@@ -86,7 +88,8 @@ func (c *conn) startPaged(req *SearchRequest, log *slog.Logger) *page {
 		done:    make(chan Result, 1),
 		cancel:  cancel,
 	}
-	w := &pagedWriter{ctx: ctx, page: pg}
+	pg.typesOnly = req.TypesOnly
+	w := &pagedWriter{ctx: ctx, page: pg, schema: c.srv.Schema, filter: req.Filter, selection: selection(req)}
 	go func() {
 		defer close(pg.done)
 		r, err := c.srv.Search.Search(ctx, c, req, w)
@@ -125,7 +128,7 @@ func (c *conn) sendPage(m *message, pg *page, want *pagedRequest, log *slog.Logg
 			// side has already taken its last entry. A second completion
 			// signal would be a second thing to keep in step with the
 			// first.
-			c.send(entryMessage(m.id, e, false))
+			c.send(entryMessage(m.id, e, pg.typesOnly))
 			sent++
 		case uris := <-pg.refs:
 			c.send(referenceMessage(m.id, uris))
@@ -182,13 +185,24 @@ func (c *conn) endPage(m *message, pg *page, cookie string, r Result, ok bool) {
 // until it is ready -- which is the backpressure that makes paging work
 // without buffering the result.
 type pagedWriter struct {
-	ctx  context.Context
-	page *page
+	ctx    context.Context
+	page   *page
+	schema *schema.Schema
+	filter Filter
+	// selection is what the client asked to be sent back. ⛔ Until v0.8.0 a
+	// paged search ignored it and sent every attribute, operational ones
+	// included, whatever the request named.
+	selection selector
 }
 
 func (w *pagedWriter) Entry(e *Entry) error {
+	// As entryWriter does: with a schema, an entry the filter does not make
+	// True is not part of the answer, and does not take a place on a page.
+	if w.schema != nil && Evaluate(w.filter, e, w.schema) != schema.True {
+		return nil
+	}
 	select {
-	case w.page.entries <- e:
+	case w.page.entries <- project(e, w.selection, w.schema):
 		return nil
 	case <-w.ctx.Done():
 		return w.ctx.Err()

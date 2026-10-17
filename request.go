@@ -2,7 +2,11 @@
 
 package ldap
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/go-authn/ldap/schema"
+)
 
 // The requests, as RFC 4511 defines them. Every one of them is a type that
 // carries the protocol's own fields, because a field a type cannot hold is a
@@ -25,6 +29,11 @@ type SearchRequest struct {
 	// attributes", which is NOT the same as "everything": operational
 	// attributes are returned only when named, or by "+".
 	Attributes []string
+
+	// schema is the server's, for Matches. It is not exported: a handler
+	// asks the request whether an entry matches, and the request knows
+	// which rules apply.
+	schema *schema.Schema
 }
 
 // A BindRequest is RFC 4511 4.2. Exactly one of Simple and SASL is set.

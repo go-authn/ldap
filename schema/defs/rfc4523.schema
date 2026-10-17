@@ -1,0 +1,186 @@
+# RFC 4523: LDAP Schema Definitions for X.509 Certificates.
+# https://www.rfc-editor.org/rfc/rfc4523.txt, read 2026-10-12.
+#
+# Here because inetOrgPerson (RFC 2798) MAY have a userCertificate. Every
+# syntax, rule, attribute type and object class of sections 2 to 5, copied
+# mechanically (only the line indentation differs), with ONE correction:
+#
+#   - section 3.7 names the rule 'algorithmIdentifier', and 4.7 uses it as
+#     'algorithmIdentifierMatch'. Verified erratum 4107 says the name is
+#     'algorithmIdentifierMatch', and that is the name below.
+#
+# None of these rules is implemented (they compare parsed X.509 structures),
+# so an assertion on these attributes is Undefined (RFC 4511 4.5.1.7).
+#
+# OpenLDAP's core.schema keeps RFC 2256's versions of
+# authorityRevocationList, certificateRevocationList, crossCertificatePair,
+# deltaRevocationList and supportedAlgorithms, with NO equality rule; RFC
+# 4523 gives each one. The RFC wins.
+
+# RFC 4523, section 2.1 Certificate
+ldapsyntax ( 1.3.6.1.4.1.1466.115.121.1.8 DESC 'X.509 Certificate' )
+
+# RFC 4523, section 2.2 CertificateList
+ldapsyntax ( 1.3.6.1.4.1.1466.115.121.1.9 DESC 'X.509 Certificate List' )
+
+# RFC 4523, section 2.3 CertificatePair
+ldapsyntax ( 1.3.6.1.4.1.1466.115.121.1.10 DESC 'X.509 Certificate Pair' )
+
+# RFC 4523, section 2.4 SupportedAlgorithm
+ldapsyntax ( 1.3.6.1.4.1.1466.115.121.1.49
+	     DESC 'X.509 Supported Algorithm' )
+
+# RFC 4523, section 2.5 CertificateExactAssertion
+ldapsyntax ( 1.3.6.1.1.15.1 DESC 'X.509 Certificate Exact Assertion' )
+
+# RFC 4523, section 2.6 CertificateAssertion
+ldapsyntax ( 1.3.6.1.1.15.2 DESC 'X.509 Certificate Assertion' )
+
+# RFC 4523, section 2.7 CertificatePairExactAssertion
+ldapsyntax ( 1.3.6.1.1.15.3
+	     DESC 'X.509 Certificate Pair Exact Assertion' )
+
+# RFC 4523, section 2.8 CertificatePairAssertion
+ldapsyntax ( 1.3.6.1.1.15.4 DESC 'X.509 Certificate Pair Assertion' )
+
+# RFC 4523, section 2.9 CertificateListExactAssertion
+ldapsyntax ( 1.3.6.1.1.15.5
+	     DESC 'X.509 Certificate List Exact Assertion' )
+
+# RFC 4523, section 2.10 CertificateListAssertion
+ldapsyntax ( 1.3.6.1.1.15.6 DESC 'X.509 Certificate List Assertion' )
+
+# RFC 4523, section 2.11 AlgorithmIdentifier
+ldapsyntax ( 1.3.6.1.1.15.7 DESC 'X.509 Algorithm Identifier' )
+
+# RFC 4523, section 3.1 certificateExactMatch
+matchingrule ( 2.5.13.34 NAME 'certificateExactMatch'
+	     DESC 'X.509 Certificate Exact Match'
+	     SYNTAX 1.3.6.1.1.15.1 )
+
+# RFC 4523, section 3.2 certificateMatch
+matchingrule ( 2.5.13.35 NAME 'certificateMatch'
+	     DESC 'X.509 Certificate Match'
+	     SYNTAX 1.3.6.1.1.15.2 )
+
+# RFC 4523, section 3.3 certificatePairExactMatch
+matchingrule ( 2.5.13.36 NAME 'certificatePairExactMatch'
+	     DESC 'X.509 Certificate Pair Exact Match'
+	     SYNTAX 1.3.6.1.1.15.3 )
+
+# RFC 4523, section 3.4 certificatePairMatch
+matchingrule ( 2.5.13.37 NAME 'certificatePairMatch'
+	     DESC 'X.509 Certificate Pair Match'
+	     SYNTAX 1.3.6.1.1.15.4 )
+
+# RFC 4523, section 3.5 certificateListExactMatch
+matchingrule ( 2.5.13.38 NAME 'certificateListExactMatch'
+	     DESC 'X.509 Certificate List Exact Match'
+	     SYNTAX 1.3.6.1.1.15.5 )
+
+# RFC 4523, section 3.6 certificateListMatch
+matchingrule ( 2.5.13.39 NAME 'certificateListMatch'
+	     DESC 'X.509 Certificate List Match'
+	     SYNTAX 1.3.6.1.1.15.6 )
+
+# RFC 4523, section 3.7 algorithmIdentifierMatch
+# (the name is erratum 4107's; the RFC prints 'algorithmIdentifier')
+matchingrule ( 2.5.13.40 NAME 'algorithmIdentifierMatch'
+	     DESC 'X.509 Algorithm Identifier Match'
+	     SYNTAX 1.3.6.1.1.15.7 )
+
+# RFC 4523, section 4.1 userCertificate
+attributetype ( 2.5.4.36 NAME 'userCertificate'
+	     DESC 'X.509 user certificate'
+	     EQUALITY certificateExactMatch
+	     SYNTAX 1.3.6.1.4.1.1466.115.121.1.8 )
+
+# RFC 4523, section 4.2 cACertificate
+attributetype ( 2.5.4.37 NAME 'cACertificate'
+	     DESC 'X.509 CA certificate'
+	     EQUALITY certificateExactMatch
+	     SYNTAX 1.3.6.1.4.1.1466.115.121.1.8 )
+
+# RFC 4523, section 4.3 crossCertificatePair
+attributetype ( 2.5.4.40 NAME 'crossCertificatePair'
+	     DESC 'X.509 cross certificate pair'
+	     EQUALITY certificatePairExactMatch
+	     SYNTAX 1.3.6.1.4.1.1466.115.121.1.10 )
+
+# RFC 4523, section 4.4 certificateRevocationList
+attributetype ( 2.5.4.39 NAME 'certificateRevocationList'
+	     DESC 'X.509 certificate revocation list'
+	     EQUALITY certificateListExactMatch
+	     SYNTAX 1.3.6.1.4.1.1466.115.121.1.9 )
+
+# RFC 4523, section 4.5 authorityRevocationList
+attributetype ( 2.5.4.38 NAME 'authorityRevocationList'
+	     DESC 'X.509 authority revocation list'
+	     EQUALITY certificateListExactMatch
+	     SYNTAX 1.3.6.1.4.1.1466.115.121.1.9 )
+
+# RFC 4523, section 4.6 deltaRevocationList
+attributetype ( 2.5.4.53 NAME 'deltaRevocationList'
+	     DESC 'X.509 delta revocation list'
+	     EQUALITY certificateListExactMatch
+	     SYNTAX 1.3.6.1.4.1.1466.115.121.1.9 )
+
+# RFC 4523, section 4.7 supportedAlgorithms
+attributetype ( 2.5.4.52 NAME 'supportedAlgorithms'
+	     DESC 'X.509 supported algorithms'
+	     EQUALITY algorithmIdentifierMatch
+	     SYNTAX 1.3.6.1.4.1.1466.115.121.1.49 )
+
+# RFC 4523, section 5.1 pkiUser
+objectclass ( 2.5.6.21 NAME 'pkiUser'
+	     DESC 'X.509 PKI User'
+	     SUP top AUXILIARY
+	     MAY userCertificate )
+
+# RFC 4523, section 5.2 pkiCA
+objectclass ( 2.5.6.22 NAME 'pkiCA'
+	     DESC 'X.509 PKI Certificate Authority'
+	     SUP top AUXILIARY
+	     MAY ( cACertificate $ certificateRevocationList $
+	          authorityRevocationList $ crossCertificatePair ) )
+
+# RFC 4523, section 5.3 cRLDistributionPoint
+objectclass ( 2.5.6.19 NAME 'cRLDistributionPoint'
+	     DESC 'X.509 CRL distribution point'
+	     SUP top STRUCTURAL
+	     MUST cn
+	     MAY ( certificateRevocationList $
+	          authorityRevocationList $ deltaRevocationList ) )
+
+# RFC 4523, section 5.4 deltaCRL
+objectclass ( 2.5.6.23 NAME 'deltaCRL'
+	     DESC 'X.509 delta CRL'
+	     SUP top AUXILIARY
+	     MAY deltaRevocationList )
+
+# RFC 4523, section 5.5 strongAuthenticationUser
+objectclass ( 2.5.6.15 NAME 'strongAuthenticationUser'
+	     DESC 'X.521 strong authentication user'
+	     SUP top AUXILIARY
+	     MUST userCertificate )
+
+# RFC 4523, section 5.6 userSecurityInformation
+objectclass ( 2.5.6.18 NAME 'userSecurityInformation'
+	     DESC 'X.521 user security information'
+	     SUP top AUXILIARY
+	     MAY ( supportedAlgorithms ) )
+
+# RFC 4523, section 5.7 certificationAuthority
+objectclass ( 2.5.6.16 NAME 'certificationAuthority'
+	     DESC 'X.509 certificate authority'
+	     SUP top AUXILIARY
+	     MUST ( authorityRevocationList $
+	          certificateRevocationList $ cACertificate )
+	     MAY crossCertificatePair )
+
+# RFC 4523, section 5.8 certificationAuthority-V2
+objectclass ( 2.5.6.16.2 NAME 'certificationAuthority-V2'
+	     DESC 'X.509 certificate authority, version 2'
+	     SUP certificationAuthority AUXILIARY
+	     MAY deltaRevocationList )
+

@@ -1,0 +1,444 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
+package schema
+
+import (
+	"fmt"
+	"slices"
+	"strings"
+)
+
+// A Schema is a set of definitions that refer to one another and have been
+// checked to: every SUP, rule, syntax, MUST and MAY names something that is
+// there.
+//
+// It is read-only once built, so one Schema serves every connection of a
+// server without a lock. The elements it hands out belong to it and must not
+// be changed.
+type Schema struct {
+	syntaxes []*Syntax
+	rules    []*MatchingRule
+	types    []*AttributeType
+	classes  []*ObjectClass
+	uses     []*MatchingRuleUse
+
+	syntaxByOID map[string]*Syntax
+	ruleBy      map[string]*MatchingRule
+	typeBy      map[string]*AttributeType
+	classBy     map[string]*ObjectClass
+	useBy       map[string]*MatchingRuleUse
+	// appliesTo is each rule's matchingRuleUse as a set, by the rule's OID.
+	appliesTo map[string]map[*AttributeType]bool
+	// oidOf resolves a descriptor of any kind to its OID, for
+	// objectIdentifierMatch, or to "" when it names two different OIDs.
+	oidOf map[string]string
+}
+
+// A File is a set of definitions in the form the embedded files use, which
+// is the form of OpenLDAP's .schema files: a definition starts with its kind
+// -- ldapsyntax, matchingrule, attributetype or objectclass -- at the start
+// of a line and continues on the lines that start with white space; '#'
+// starts a comment line.
+//
+// The continuation lines are joined with ONE space, so a definition copied
+// from an RFC keeps the RFC's line breaks and reads as RFC 4512 4.1 wants it.
+type File struct {
+	Name string
+	Data []byte
+}
+
+// A FileError is a definition in a File that could not be read, and where.
+type FileError struct {
+	File string
+	Line int
+	Err  error
+}
+
+func (e *FileError) Error() string { return fmt.Sprintf("%s:%d: %v", e.File, e.Line, e.Err) }
+func (e *FileError) Unwrap() error { return e.Err }
+
+// definitions is a File read into its parts, in order.
+type definitions struct {
+	syntaxes []*Syntax
+	rules    []*MatchingRule
+	types    []*AttributeType
+	classes  []*ObjectClass
+}
+
+func (d *definitions) read(f File) error {
+	lines := strings.Split(string(f.Data), "\n")
+	for i := 0; i < len(lines); i++ {
+		l := strings.TrimRight(lines[i], " \t\r")
+		if l == "" || l[0] == '#' {
+			continue
+		}
+		if l[0] == ' ' || l[0] == '\t' {
+			return &FileError{f.Name, i + 1, fmt.Errorf("a continuation line with no definition before it")}
+		}
+		first := i + 1
+		kind, def := l, ""
+		if i := strings.IndexAny(l, " \t"); i >= 0 {
+			kind, def = l[:i], l[i+1:]
+		}
+		parts := []string{strings.TrimSpace(def)}
+		for i+1 < len(lines) {
+			n := strings.TrimRight(lines[i+1], " \t\r")
+			if n == "" || (n[0] != ' ' && n[0] != '\t') {
+				break
+			}
+			parts = append(parts, strings.TrimLeft(n, " \t"))
+			i++
+		}
+		text := strings.Join(parts, " ")
+		var err error
+		switch strings.ToLower(kind) {
+		case "ldapsyntax":
+			var x *Syntax
+			if x, err = ParseSyntax(text); err == nil {
+				d.syntaxes = append(d.syntaxes, x)
+			}
+		case "matchingrule":
+			var x *MatchingRule
+			if x, err = ParseMatchingRule(text); err == nil {
+				d.rules = append(d.rules, x)
+			}
+		case "attributetype":
+			var x *AttributeType
+			if x, err = ParseAttributeType(text); err == nil {
+				d.types = append(d.types, x)
+			}
+		case "objectclass":
+			var x *ObjectClass
+			if x, err = ParseObjectClass(text); err == nil {
+				d.classes = append(d.classes, x)
+			}
+		default:
+			err = fmt.Errorf("%q is not a kind of definition (ldapsyntax, matchingrule, attributetype, objectclass)", kind)
+		}
+		if err != nil {
+			return &FileError{f.Name, first, err}
+		}
+	}
+	return nil
+}
+
+// Build reads the files, in order, into one Schema, and checks that every
+// definition refers only to definitions that are there.
+//
+// A definition may refer to one later in the same file or in a later file:
+// the RFCs list attribute types alphabetically, so 'cn' (SUP name) comes
+// before 'name' in RFC 4519.
+func Build(files ...File) (*Schema, error) {
+	var d definitions
+	for _, f := range files {
+		if err := d.read(f); err != nil {
+			return nil, err
+		}
+	}
+	s := &Schema{
+		syntaxByOID: map[string]*Syntax{},
+		ruleBy:      map[string]*MatchingRule{},
+		typeBy:      map[string]*AttributeType{},
+		classBy:     map[string]*ObjectClass{},
+		useBy:       map[string]*MatchingRuleUse{},
+		appliesTo:   map[string]map[*AttributeType]bool{},
+		oidOf:       map[string]string{},
+	}
+	for _, x := range d.syntaxes {
+		if s.syntaxByOID[x.OID] != nil {
+			return nil, fmt.Errorf("schema: the syntax %s is defined twice", x.OID)
+		}
+		s.syntaxByOID[x.OID] = x
+		s.syntaxes = append(s.syntaxes, x)
+	}
+	for _, x := range d.rules {
+		if err := index(s, s.ruleBy, x, x.OID, x.Names, "matching rule"); err != nil {
+			return nil, err
+		}
+		s.rules = append(s.rules, x)
+	}
+	for _, x := range d.types {
+		if err := index(s, s.typeBy, x, x.OID, x.Names, "attribute type"); err != nil {
+			return nil, err
+		}
+		s.types = append(s.types, x)
+	}
+	for _, x := range d.classes {
+		if err := index(s, s.classBy, x, x.OID, x.Names, "object class"); err != nil {
+			return nil, err
+		}
+		s.classes = append(s.classes, x)
+	}
+	for _, r := range s.rules {
+		if s.syntaxByOID[r.Syntax] == nil {
+			return nil, fmt.Errorf("schema: the matching rule %s has the syntax %s, which is not defined", r.Name(), r.Syntax)
+		}
+	}
+	for _, t := range s.types {
+		if err := s.linkType(t, nil); err != nil {
+			return nil, err
+		}
+	}
+	for _, c := range s.classes {
+		if err := s.linkClass(c, nil); err != nil {
+			return nil, err
+		}
+	}
+	s.deriveUses()
+	return s, nil
+}
+
+// index files an element under its OID and each of its names, refusing an
+// OID defined twice and remembering a name two OIDs claim.
+func index[T any](s *Schema, by map[string]T, x T, oid string, names []string, what string) error {
+	if _, dup := by[oid]; dup {
+		return fmt.Errorf("schema: the %s %s is defined twice", what, oid)
+	}
+	by[oid] = x
+	for _, n := range names {
+		k := strings.ToLower(n)
+		if _, dup := by[k]; dup {
+			// RFC 4512 1.4: "Implementations SHOULD treat short names
+			// (descriptors) used in an ambiguous manner ... as
+			// unrecognized." Refused here rather than resolved one way or
+			// the other, because which one wins would depend on the order
+			// the files were given in.
+			return fmt.Errorf("schema: the name %q is given to two %ss", n, what)
+		}
+		by[k] = x
+		if o, seen := s.oidOf[k]; seen && o != oid {
+			s.oidOf[k] = "" // the same name for two different things
+		} else {
+			s.oidOf[k] = oid
+		}
+	}
+	return nil
+}
+
+func (s *Schema) linkType(t *AttributeType, seen []*AttributeType) error {
+	if slices.Contains(seen, t) {
+		return fmt.Errorf("schema: the attribute type %s is its own supertype", t.Name())
+	}
+	if t.linked {
+		return nil
+	}
+	t.linked = true
+	rule := func(name, what string) (*MatchingRule, error) {
+		if name == "" {
+			return nil, nil
+		}
+		r := s.ruleBy[strings.ToLower(name)]
+		if r == nil {
+			return nil, fmt.Errorf("schema: the attribute type %s has the %s rule %s, which is not defined", t.Name(), what, name)
+		}
+		return r, nil
+	}
+	var err error
+	if t.equality, err = rule(t.Equality, "EQUALITY"); err != nil {
+		return err
+	}
+	if t.ordering, err = rule(t.Ordering, "ORDERING"); err != nil {
+		return err
+	}
+	if t.sub, err = rule(t.Substr, "SUBSTR"); err != nil {
+		return err
+	}
+	if t.Syntax != "" && s.syntaxByOID[t.Syntax] == nil {
+		return fmt.Errorf("schema: the attribute type %s has the syntax %s, which is not defined", t.Name(), t.Syntax)
+	}
+	t.syntax = t.Syntax
+	if t.Sup != "" {
+		sup := s.typeBy[strings.ToLower(t.Sup)]
+		if sup == nil {
+			return fmt.Errorf("schema: the attribute type %s has the supertype %s, which is not defined", t.Name(), t.Sup)
+		}
+		if err := s.linkType(sup, append(seen, t)); err != nil {
+			return err
+		}
+		t.sup = sup
+		// RFC 4512 4.1.2: "If no SYNTAX field is provided, the attribute
+		// type description takes its value from the supertype", and "the
+		// EQUALITY, ORDERING, and SUBSTRING fields, if not specified, take
+		// their value from the supertype."
+		if t.syntax == "" {
+			t.syntax = sup.syntax
+		}
+		if t.equality == nil {
+			t.equality = sup.equality
+		}
+		if t.ordering == nil {
+			t.ordering = sup.ordering
+		}
+		if t.sub == nil {
+			t.sub = sup.sub
+		}
+		// RFC 4512 2.5.1: "a subtype must have the same usage as its direct
+		// supertype" and "must be collective if its supertype is".
+		if t.Usage != sup.Usage {
+			return fmt.Errorf("schema: the attribute type %s is %s and its supertype %s is %s (RFC 4512 2.5.1)", t.Name(), t.Usage, sup.Name(), sup.Usage)
+		}
+		if sup.Collective && !t.Collective {
+			return fmt.Errorf("schema: the attribute type %s must be COLLECTIVE like its supertype %s (RFC 4512 2.5.1)", t.Name(), sup.Name())
+		}
+	}
+	// RFC 4512 4.1.2: "COLLECTIVE requires usage userApplications" and
+	// "NO-USER-MODIFICATION requires an operational usage."
+	if t.Collective && t.Usage != UserApplications {
+		return fmt.Errorf("schema: the attribute type %s is COLLECTIVE and %s (RFC 4512 4.1.2)", t.Name(), t.Usage)
+	}
+	if t.NoUserModification && t.Usage == UserApplications {
+		return fmt.Errorf("schema: the attribute type %s is NO-USER-MODIFICATION and a user attribute (RFC 4512 4.1.2)", t.Name())
+	}
+	return nil
+}
+
+func (s *Schema) linkClass(c *ObjectClass, seen []*ObjectClass) error {
+	if c.must != nil {
+		return nil // already linked
+	}
+	if slices.Contains(seen, c) {
+		return fmt.Errorf("schema: the object class %s is its own superclass", c.Name())
+	}
+	var must, may []*AttributeType
+	add := func(list *[]*AttributeType, t *AttributeType) {
+		if !slices.Contains(*list, t) {
+			*list = append(*list, t)
+		}
+	}
+	for _, name := range c.Sup {
+		sup := s.classBy[strings.ToLower(name)]
+		if sup == nil {
+			return fmt.Errorf("schema: the object class %s has the superclass %s, which is not defined", c.Name(), name)
+		}
+		if err := s.linkClass(sup, append(seen, c)); err != nil {
+			return err
+		}
+		// RFC 4512 2.4.1-2.4.3: what may derive from what.
+		switch {
+		case c.Kind == Abstract && sup.Kind != Abstract:
+			return fmt.Errorf("schema: the abstract class %s derives from the %s class %s (RFC 4512 2.4.1)", c.Name(), strings.ToLower(sup.Kind.String()), sup.Name())
+		case c.Kind == Structural && sup.Kind == Auxiliary:
+			return fmt.Errorf("schema: the structural class %s derives from the auxiliary class %s (RFC 4512 2.4.2)", c.Name(), sup.Name())
+		case c.Kind == Auxiliary && sup.Kind == Structural:
+			return fmt.Errorf("schema: the auxiliary class %s derives from the structural class %s (RFC 4512 2.4.3)", c.Name(), sup.Name())
+		}
+		c.sup = append(c.sup, sup)
+		for _, t := range sup.must {
+			add(&must, t)
+		}
+		for _, t := range sup.may {
+			add(&may, t)
+		}
+	}
+	for _, list := range []struct {
+		names []string
+		into  *[]*AttributeType
+		what  string
+	}{{c.Must, &must, "MUST"}, {c.May, &may, "MAY"}} {
+		for _, name := range list.names {
+			t := s.typeBy[strings.ToLower(name)]
+			if t == nil {
+				return fmt.Errorf("schema: the object class %s has %s %s, which is not a defined attribute type", c.Name(), list.what, name)
+			}
+			add(list.into, t)
+		}
+	}
+	// RFC 4512 2.4: "If an attribute is a member of both sets, it is
+	// required to be present."
+	may = slices.DeleteFunc(may, func(t *AttributeType) bool { return slices.Contains(must, t) })
+	if must == nil {
+		must = []*AttributeType{}
+	}
+	if may == nil {
+		may = []*AttributeType{}
+	}
+	c.must, c.may = must, may
+	return nil
+}
+
+// deriveUses builds the matchingRuleUse values (RFC 4512 4.1.4): which
+// attribute types each rule may be used with in an extensible match.
+//
+// A rule applies to a type when it is one of the type's own rules, or when
+// its assertion syntax is the type's syntax -- RFC 4517 4.1: servers "SHOULD
+// allow matching rules to be used with all attribute types known to the
+// server, where the assertion syntax of the matching rule is the same as the
+// value syntax of the attribute."
+func (s *Schema) deriveUses() {
+	for _, r := range s.rules {
+		var applies []string
+		set := map[*AttributeType]bool{}
+		for _, t := range s.types {
+			if t.equality == r || t.ordering == r || t.sub == r || t.syntax == r.Syntax {
+				applies = append(applies, t.Name())
+				set[t] = true
+			}
+		}
+		if applies == nil {
+			continue
+		}
+		u := &MatchingRuleUse{OID: r.OID, Names: r.Names, Applies: applies}
+		s.uses = append(s.uses, u)
+		s.useBy[r.OID] = u
+		s.appliesTo[r.OID] = set
+	}
+}
+
+// AttributeType finds a type by any of its names or its OID, without regard
+// to case, or returns nil.
+func (s *Schema) AttributeType(name string) *AttributeType { return s.typeBy[strings.ToLower(name)] }
+
+// ObjectClass finds a class by any of its names or its OID, or returns nil.
+func (s *Schema) ObjectClass(name string) *ObjectClass { return s.classBy[strings.ToLower(name)] }
+
+// MatchingRule finds a rule by any of its names or its OID, or returns nil.
+func (s *Schema) MatchingRule(name string) *MatchingRule { return s.ruleBy[strings.ToLower(name)] }
+
+// Syntax finds a syntax by its OID, or returns nil. Syntaxes have no names
+// (RFC 4517 3.1).
+func (s *Schema) Syntax(oid string) *Syntax { return s.syntaxByOID[oid] }
+
+// MatchingRuleUse is the use of a rule, by the rule's name or OID, or nil
+// when the rule applies to no attribute type here.
+func (s *Schema) MatchingRuleUse(rule string) *MatchingRuleUse {
+	if r := s.MatchingRule(rule); r != nil {
+		return s.useBy[r.OID]
+	}
+	return nil
+}
+
+// Applies reports whether a rule may be used with an attribute type in an
+// extensible match: whether the type, or one of its supertypes, is in the
+// rule's matchingRuleUse.
+func (s *Schema) Applies(r *MatchingRule, t *AttributeType) bool {
+	set := s.appliesTo[r.OID]
+	for x := t; x != nil; x = x.sup {
+		if set[x] {
+			return true
+		}
+	}
+	return false
+}
+
+// Syntaxes, MatchingRules, AttributeTypes, ObjectClasses and
+// MatchingRuleUses list everything, in the order it was defined.
+func (s *Schema) Syntaxes() []*Syntax                  { return slices.Clone(s.syntaxes) }
+func (s *Schema) MatchingRules() []*MatchingRule       { return slices.Clone(s.rules) }
+func (s *Schema) AttributeTypes() []*AttributeType     { return slices.Clone(s.types) }
+func (s *Schema) ObjectClasses() []*ObjectClass        { return slices.Clone(s.classes) }
+func (s *Schema) MatchingRuleUses() []*MatchingRuleUse { return slices.Clone(s.uses) }
+
+// resolveOID is objectIdentifierMatch's reading of a value (RFC 4517
+// 4.2.26): a numeric OID as itself, a descriptor as the OID it names. The
+// second result is false for a descriptor nothing here defines, or one that
+// names two different OIDs, which the rule makes Undefined.
+func (s *Schema) resolveOID(v string) (string, bool) {
+	if isNumericOID(v) {
+		return v, true
+	}
+	if !isKeystring(v) {
+		return "", false
+	}
+	o := s.oidOf[strings.ToLower(v)]
+	return o, o != ""
+}

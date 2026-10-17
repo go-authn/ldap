@@ -67,6 +67,11 @@ func (c *conn) rootDSE() *Entry {
 	e.Attributes = append(e.Attributes, OperationalAttribute("supportedControl", supportedControls...))
 	e.Attributes = append(e.Attributes, OperationalAttribute("supportedFeatures", supportedFeatures...))
 
+	// RFC 4512 5.1: "The root DSE may also include a 'subschemaSubentry'
+	// attribute", the subschema that controls the root DSE itself.
+	if c.srv.Schema != nil {
+		e.Attributes = append(e.Attributes, OperationalAttribute("subschemaSubentry", SubschemaDN))
+	}
 	if v := c.srv.Vendor; v != "" {
 		e.Attributes = append(e.Attributes, OperationalAttribute("vendorName", v))
 	}

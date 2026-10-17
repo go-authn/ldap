@@ -78,6 +78,9 @@ type page struct {
 	refs    chan []string
 	done    chan Result
 	cancel  context.CancelFunc
+	// typesOnly is the request's: every page of a sequence answers the same
+	// search (RFC 2696 3).
+	typesOnly bool
 	// err is what the handler returned, read only after done is closed.
 	err error
 }

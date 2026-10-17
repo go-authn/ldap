@@ -61,6 +61,7 @@ func (c *conn) operation(ctx context.Context, m *message, log *slog.Logger) {
 			c.send(resultMessage(m.id, resp, Refuse(ProtocolError, "%v", err)))
 			return
 		}
+		req.schema = c.srv.Schema
 		search = req
 	}
 
@@ -98,6 +99,15 @@ func (c *conn) operation(ctx context.Context, m *message, log *slog.Logger) {
 		return
 	}
 
+	// The subschema subentry is answered here, like the root DSE, and AFTER
+	// the confidentiality gate: the root DSE is exempt only because it is
+	// where StartTLS is advertised, and nothing about the schema is needed
+	// to ask for TLS.
+	if search != nil && isSubschemaRead(c.srv.Schema, search) {
+		c.searchSubschema(ctx, m, search)
+		return
+	}
+
 	switch m.op.Tag {
 	case appBindRequest:
 		c.bind(ctx, m, log)
@@ -106,7 +116,7 @@ func (c *conn) operation(ctx context.Context, m *message, log *slog.Logger) {
 		// OUTLIVES this request: the handler stays running, parked on its
 		// next entry, until the client asks for the next page or goes away.
 		if ctl := Find(m.controls, OIDPaging); ctl != nil && c.srv.Search != nil {
-			if err := Unsupported(search.Filter); err != nil {
+			if err := Unsupported(search.Filter); err != nil && c.srv.Schema == nil {
 				c.send(resultMessage(m.id, appSearchResDone, Refuse(InappropriateMatching, "%v", err)))
 				return
 			}
