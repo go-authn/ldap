@@ -128,10 +128,15 @@ func (s selector) wants(a *Attribute) bool {
 }
 
 // project keeps only the attributes the client selected.
-func (w *entryWriter) project(e *Entry) *Entry {
+func (w *entryWriter) project(e *Entry) *Entry { return project(e, w.selection, w.schema) }
+
+// project is the selection applied to one entry, by every writer: a writer
+// that sends entries without it sends attributes nobody asked for, which is
+// what the paged writer did until this was shared.
+func project(e *Entry, sel selector, s *schema.Schema) *Entry {
 	out := &Entry{DN: e.DN}
 	for _, a := range e.Attributes {
-		if w.selection.wants(a) {
+		if sel.wants(a) {
 			out.Attributes = append(out.Attributes, a)
 		}
 	}
@@ -139,8 +144,8 @@ func (w *entryWriter) project(e *Entry) *Entry {
 	// modifiable entry ... It is strongly RECOMMENDED that all other servers
 	// implement this as well." It is how a client finds the schema that
 	// governs an entry (4.4). Operational, so only "+" or its name brings it.
-	if w.schema != nil && e.Attribute("subschemaSubentry") == nil {
-		if a := OperationalAttribute("subschemaSubentry", SubschemaDN); w.selection.wants(a) {
+	if s != nil && e.Attribute("subschemaSubentry") == nil {
+		if a := OperationalAttribute("subschemaSubentry", SubschemaDN); sel.wants(a) {
 			out.Attributes = append(out.Attributes, a)
 		}
 	}
