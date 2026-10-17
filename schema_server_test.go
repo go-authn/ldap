@@ -95,7 +95,8 @@ func TestEvaluateWithASchema(t *testing.T) {
 		{"(uidNumber:2.5.13.15:=998)", schema.False},
 		{"(cn:caseExactMatch:=Alice Smith)", schema.True},
 		{"(cn:caseExactMatch:=alice smith)", schema.False},
-		{"(uid:integerMatch:=1)", schema.Undefined},          // not suitable for uid
+		{"(uid:integerMatch:=1)", schema.Undefined},
+		{"(uidNumber:caseIgnoreMatch:=999)", schema.Undefined}, // the strings are equal; the rule does not apply to an Integer          // not suitable for uid
 		{"(uid:nonsenseMatch:=x)", schema.Undefined},         // not recognized
 		{"(uid:certificateExactMatch:=x)", schema.Undefined}, // not implemented
 		{"(shoeSize:caseIgnoreMatch:=x)", schema.Undefined},

@@ -204,3 +204,20 @@ func TestDescribe(t *testing.T) {
 		}
 	}
 }
+
+// RFC 4512 2.5.3: "a 'MUST name' specification is fulfilled by 'name' or
+// 'name;x-tag-option', but is not fulfilled by 'CN'", and likewise for MAY.
+func TestMustAndMayNameTheTypeNotItsSubtypes(t *testing.T) {
+	s, err := Build(append(StandardFiles(), File{"x", []byte("objectclass ( 1.9.9 NAME 'named' SUP top STRUCTURAL MUST name MAY description )")})...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.Validate(entry("cn=a", "objectClass: top", "objectClass: named", "cn: a", "name;lang-fr: b"))
+	if ve := problems(t, err); !ve.Has(NotAllowed) || ve.Has(MissingRequired) || !strings.Contains(err.Error(), "cn is not allowed") {
+		t.Errorf("%v", err)
+	}
+	err = s.Validate(entry("cn=a", "objectClass: top", "objectClass: named", "cn: a"))
+	if ve := problems(t, err); !ve.Has(MissingRequired) {
+		t.Errorf("MUST name was met by cn: %v", err)
+	}
+}
