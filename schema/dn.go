@@ -128,7 +128,7 @@ func stringValue(s string, i int) ([]byte, int, error) {
 			if i+1 >= len(s) {
 				return nil, i, errDN
 			}
-			if b, err := hex.DecodeString(safeSlice(s, i+1, i+3)); err == nil {
+			if b, err := hex.DecodeString(safeSlice(s, i+1, i+3)); err == nil && len(b) == 1 {
 				out = append(out, b[0])
 				i += 3
 			} else if strings.IndexByte(`\ #=+,;<>"`, s[i+1]) >= 0 {

@@ -130,12 +130,13 @@ func mapsToSpace(r rune) bool {
 }
 
 // prohibited is RFC 4518 2.4.
+//
+// RFC 3454 table C.8 is not tested here because nothing in it survives the
+// steps before: U+200E, 200F, 202A-202E and 206A-206F are mapped to nothing
+// (2.2), and NFKC replaces U+0340 and U+0341 with U+0300 and U+0301.
 func prohibited(r rune) bool {
 	switch {
 	case r == 0xFFFD: // REPLACEMENT CHARACTER
-		return true
-	case r == 0x0340, r == 0x0341, r == 0x200E, r == 0x200F,
-		r >= 0x202A && r <= 0x202E, r >= 0x206A && r <= 0x206F: // RFC 3454 C.8
 		return true
 	case unicode.Is(unicode.Co, r): // C.3 private use
 		return true

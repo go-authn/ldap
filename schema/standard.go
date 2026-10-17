@@ -31,10 +31,9 @@ var standardFiles = []string{
 func StandardFiles() []File {
 	out := make([]File, 0, len(standardFiles))
 	for _, name := range standardFiles {
-		b, err := defs.ReadFile("defs/" + name)
-		if err != nil {
-			panic(err) // embedded at compile time; a test reads every one
-		}
+		// Embedded at compile time, so it is there; a test checks every
+		// file is non-empty and builds.
+		b, _ := defs.ReadFile("defs/" + name)
 		out = append(out, File{Name: name, Data: b})
 	}
 	return out
@@ -46,8 +45,12 @@ var standard = sync.OnceValues(func() (*Schema, error) { return Build(StandardFi
 // 3672 and 3045, with openssh-lpk's ldapPublicKey and the two OpenLDAP
 // definitions those need. It is built once and shared: a Schema is
 // read-only.
-func Standard() *Schema {
-	s, err := standard()
+func Standard() *Schema { return must(standard()) }
+
+// must is the panic for definitions that are compiled in: they either build
+// or this package was released broken, and a test makes the second
+// impossible.
+func must(s *Schema, err error) *Schema {
 	if err != nil {
 		panic("schema: the embedded definitions do not build: " + err.Error())
 	}
