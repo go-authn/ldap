@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"strings"
 	"sync/atomic"
+
+	"github.com/go-authn/ldap/schema"
 )
 
 // errSizeLimit ends a search that has sent everything it was allowed to.
@@ -24,6 +26,10 @@ type entryWriter struct {
 	// selection is what the client asked to be sent back, already resolved.
 	selection selector
 	ctx       context.Context
+	// schema and filter, when the server has a schema, re-check every entry
+	// a handler sends: one the filter does not make True is not sent.
+	schema *schema.Schema
+	filter Filter
 }
 
 func (w *entryWriter) Entry(e *Entry) error {
@@ -31,6 +37,13 @@ func (w *entryWriter) Entry(e *Entry) error {
 		// Abandoned, or out of time. Saying so stops a handler walking a
 		// directory nobody is reading any more.
 		return err
+	}
+	if w.schema != nil && Evaluate(w.filter, e, w.schema) != schema.True {
+		// ⛔ Dropped HERE, by the server, as the selection is applied here:
+		// a handler that filtered with Filter.Matches compared strings, and
+		// "999" >= "1000" is true to it. Not an error, and not counted
+		// against the size limit -- it is not part of the answer.
+		return nil
 	}
 	if w.limit > 0 && int(w.sent.Load()) >= w.limit {
 		return errSizeLimit
@@ -122,6 +135,15 @@ func (w *entryWriter) project(e *Entry) *Entry {
 			out.Attributes = append(out.Attributes, a)
 		}
 	}
+	// RFC 4512 4.2: "providing a 'subschemaSubentry' attribute in each
+	// modifiable entry ... It is strongly RECOMMENDED that all other servers
+	// implement this as well." It is how a client finds the schema that
+	// governs an entry (4.4). Operational, so only "+" or its name brings it.
+	if w.schema != nil && e.Attribute("subschemaSubentry") == nil {
+		if a := OperationalAttribute("subschemaSubentry", SubschemaDN); w.selection.wants(a) {
+			out.Attributes = append(out.Attributes, a)
+		}
+	}
 	return out
 }
 
@@ -131,7 +153,7 @@ func (c *conn) searchRootDSE(ctx context.Context, m *message, req *SearchRequest
 	// The filter still applies: a client asking for (objectClass=nothing)
 	// against the root DSE has asked a question with no answer, and giving
 	// it one anyway would make the filter decorative.
-	if req.Filter.Matches(c.rootDSE()) {
+	if Evaluate(req.Filter, c.rootDSE(), c.srv.Schema) == schema.True {
 		if err := w.Entry(c.rootDSE()); err != nil {
 			return
 		}
@@ -145,7 +167,11 @@ func (c *conn) search(ctx context.Context, m *message, req *SearchRequest, log *
 	// match the rest. RFC 4511 4.5.1.7.7 says so, and the reason is that
 	// answering a narrower question quietly is indistinguishable from the
 	// answer being right.
-	if err := Unsupported(req.Filter); err != nil {
+	//
+	// With a schema the rules ARE known, and an extensible match naming one
+	// that is not is Undefined, never an error (RFC 4511 4.5.1.7: "Servers
+	// MUST NOT return errors if ... matching rule ids are not recognized").
+	if err := Unsupported(req.Filter); err != nil && c.srv.Schema == nil {
 		c.send(resultMessage(m.id, appSearchResDone, Refuse(InappropriateMatching, "%v", err)))
 		return
 	}
@@ -169,6 +195,8 @@ func (c *conn) search(ctx context.Context, m *message, req *SearchRequest, log *
 		typesOnly: req.TypesOnly,
 		limit:     effectiveLimit(req.SizeLimit, c.srv.MaxEntries),
 		selection: selection(req),
+		schema:    c.srv.Schema,
+		filter:    req.Filter,
 	}
 	r, err := c.srv.Search.Search(ctx, c, req, w)
 	switch {

@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+
+	"github.com/go-authn/ldap/schema"
 )
 
 // DefaultMaxPagedSearches is how many paged searches one connection may hold
@@ -86,7 +88,7 @@ func (c *conn) startPaged(req *SearchRequest, log *slog.Logger) *page {
 		done:    make(chan Result, 1),
 		cancel:  cancel,
 	}
-	w := &pagedWriter{ctx: ctx, page: pg}
+	w := &pagedWriter{ctx: ctx, page: pg, schema: c.srv.Schema, filter: req.Filter}
 	go func() {
 		defer close(pg.done)
 		r, err := c.srv.Search.Search(ctx, c, req, w)
@@ -182,11 +184,18 @@ func (c *conn) endPage(m *message, pg *page, cookie string, r Result, ok bool) {
 // until it is ready -- which is the backpressure that makes paging work
 // without buffering the result.
 type pagedWriter struct {
-	ctx  context.Context
-	page *page
+	ctx    context.Context
+	page   *page
+	schema *schema.Schema
+	filter Filter
 }
 
 func (w *pagedWriter) Entry(e *Entry) error {
+	// As entryWriter does: with a schema, an entry the filter does not make
+	// True is not part of the answer, and does not take a place on a page.
+	if w.schema != nil && Evaluate(w.filter, e, w.schema) != schema.True {
+		return nil
+	}
 	select {
 	case w.page.entries <- e:
 		return nil

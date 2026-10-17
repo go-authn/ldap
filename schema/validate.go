@@ -25,22 +25,22 @@ type Entry struct {
 type ProblemKind uint8
 
 const (
-	NoObjectClass         ProblemKind = iota + 1 // RFC 4512 3.3: every entry has one
-	UnknownClass                                 // a class this schema does not define
-	MissingSuperclass                            // RFC 4512 3.3: superclasses are present too
-	NoStructuralClass                            // RFC 4512 2.4.2: exactly one structural chain
-	SeveralStructural                            // RFC 4512 2.4.2: exactly one structural chain
-	AbstractAlone                                // RFC 4512 2.4.1
-	UnknownAttribute                             // RFC 4512 2.5: an unrecognized type or option
-	MissingRequired                              // a MUST that is not there
-	NotAllowed                                   // neither MUST nor MAY of any class
-	SingleValued                                 // more than one value of a SINGLE-VALUE type
-	DuplicateDescription                         // RFC 4512 2.5: descriptions are distinct
-	NoValues                                     // RFC 4512 2.2: one or more values
-	DuplicateValue                               // RFC 4512 2.2: no two equivalent values
-	InvalidValue                                 // not of the type's syntax
-	BadDN                                        // the DN does not parse (RFC 4514)
-	RDNNotPresent                                // RFC 4512 2.3.1: the RDN's values are the entry's
+	NoObjectClass        ProblemKind = iota + 1 // RFC 4512 3.3: every entry has one
+	UnknownClass                                // a class this schema does not define
+	MissingSuperclass                           // RFC 4512 3.3: superclasses are present too
+	NoStructuralClass                           // RFC 4512 2.4.2: exactly one structural chain
+	SeveralStructural                           // RFC 4512 2.4.2: exactly one structural chain
+	AbstractAlone                               // RFC 4512 2.4.1
+	UnknownAttribute                            // RFC 4512 2.5: an unrecognized type or option
+	MissingRequired                             // a MUST that is not there
+	NotAllowed                                  // neither MUST nor MAY of any class
+	SingleValued                                // more than one value of a SINGLE-VALUE type
+	DuplicateDescription                        // RFC 4512 2.5: descriptions are distinct
+	NoValues                                    // RFC 4512 2.2: one or more values
+	DuplicateValue                              // RFC 4512 2.2: no two equivalent values
+	InvalidValue                                // not of the type's syntax
+	BadDN                                       // the DN does not parse (RFC 4514)
+	RDNNotPresent                               // RFC 4512 2.3.1: the RDN's values are the entry's
 )
 
 // A Problem is one way an entry breaks the schema. Attribute and Class name
@@ -83,30 +83,35 @@ type description struct {
 	options string // sorted, lower case, ';'-joined: the identity of the set
 }
 
-// describe reads "type;opt;opt". ok is false for an unknown type or an
-// option this package does not recognize.
+// Describe reads an attribute description, "type;opt;opt" (RFC 4512 2.5),
+// into its type and its options: lower case, sorted, without repeats. ok is
+// false for an unknown type or an option this package does not recognize.
 //
 // ⛔ The options recognized are the language tags of RFC 3866 ("lang-...")
 // and the transfer option "binary" of RFC 4522. RFC 4512 2.5: "Servers SHALL
 // treat an attribute description with an unrecognized attribute option as
 // unrecognized." A server that ignored an option it did not understand would
 // answer for "cn;x-secret" with the values of cn.
-func (s *Schema) describe(desc string) (description, bool) {
+func (s *Schema) Describe(desc string) (t *AttributeType, options []string, ok bool) {
 	parts := strings.Split(desc, ";")
-	t := s.AttributeType(parts[0])
-	if t == nil {
-		return description{}, false
+	if t = s.AttributeType(parts[0]); t == nil {
+		return nil, nil, false
 	}
-	opts := parts[1:]
-	for i, o := range opts {
+	options = parts[1:]
+	for i, o := range options {
 		o = strings.ToLower(o)
 		if o != "binary" && !(strings.HasPrefix(o, "lang-") && len(o) > 5) {
-			return description{}, false
+			return nil, nil, false
 		}
-		opts[i] = o
+		options[i] = o
 	}
-	slices.Sort(opts)
-	return description{t: t, options: strings.Join(slices.Compact(opts), ";")}, true
+	slices.Sort(options)
+	return t, slices.Compact(options), true
+}
+
+func (s *Schema) describe(desc string) (description, bool) {
+	t, opts, ok := s.Describe(desc)
+	return description{t: t, options: strings.Join(opts, ";")}, ok
 }
 
 // Validate checks an entry against RFC 4512: its object classes form

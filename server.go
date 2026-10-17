@@ -9,6 +9,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/go-authn/ldap/schema"
 )
 
 // A Server answers LDAP on a listener.
@@ -108,6 +110,20 @@ type Server struct {
 	// Vendor and VendorVersion identify the implementation (RFC 3045).
 	Vendor        string
 	VendorVersion string
+
+	// Schema, when set, makes this server schema-aware (RFC 4512 4):
+	//
+	//   - the root DSE names the subschema subentry, SubschemaDN, in
+	//     subschemaSubentry, and so does every entry a search returns, as
+	//     an operational attribute (RFC 4512 4.2);
+	//   - a base search of SubschemaDN is answered by this server, as the
+	//     root DSE is, with the schema's definitions;
+	//   - filters are evaluated with the schema's matching rules, in
+	//     three-valued logic (see Evaluate), and an entry a handler sends
+	//     that the filter does not make True is not returned.
+	//
+	// Nil keeps the behaviour of a server with no schema exactly as it was.
+	Schema *schema.Schema
 
 	// Log receives what happened. Nil discards it.
 	//

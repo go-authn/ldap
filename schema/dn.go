@@ -209,3 +209,32 @@ func (s *Schema) matchRDN(a, b []ava) Truth {
 	}
 	return result
 }
+
+// An AVA is one attribute value assertion of a DN: a type as written and
+// the value, unescaped.
+type AVA struct {
+	Type  string
+	Value []byte
+}
+
+// DNValues is every AVA of a DN, most specific RDN first, or nil for a DN
+// that does not parse. It is what an extensible match with dnAttributes
+// compares against (RFC 4511 4.5.1.7.7).
+func DNValues(dn string) []AVA {
+	rdns, err := parseDN(dn)
+	if err != nil {
+		return nil
+	}
+	var out []AVA
+	for _, rdn := range rdns {
+		for _, a := range rdn {
+			out = append(out, AVA{Type: a.typ, Value: a.value})
+		}
+	}
+	return out
+}
+
+// MatchDN is distinguishedNameMatch (RFC 4517 4.2.15) on two DNs in their
+// string form: each value compared by its type's EQUALITY rule, so
+// "CN=Subschema" and "cn=subschema" are the same entry.
+func (s *Schema) MatchDN(a, b string) Truth { return s.matchDN([]byte(a), []byte(b)) }
