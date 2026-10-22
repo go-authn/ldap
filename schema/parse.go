@@ -36,6 +36,14 @@ func (e *ParseError) Error() string {
 type parser struct {
 	s   string
 	pos int
+	// macros, when not nil, lets a numericoid be written as an OID macro
+	// (slapd.conf(5) objectidentifier; see macro.go). The exported Parse
+	// functions leave it nil: RFC 4512 has no macros.
+	macros *OIDMacros
+	// openldap relaxes the parser the way libldap relaxes it for slapd's
+	// schema files, and only that far: tabs and newlines as white space,
+	// and quotes around an OID. Read sets it; the Parse functions do not.
+	openldap bool
 }
 
 func (p *parser) fail(format string, args ...any) error {
@@ -49,10 +57,36 @@ func (p *parser) peek() byte {
 	return 0
 }
 
+// isSpace is SPACE, and in an OpenLDAP file also a tab or a newline:
+// libldap's parse_whsp (libraries/libldap/schema.c) skips LDAP_SPACE, which
+// is all three, and published .schema files indent with tabs.
+func (p *parser) isSpace(c byte) bool {
+	return c == ' ' || p.openldap && (c == '\t' || c == '\n')
+}
+
+// openQuote reads the SQUOTE OpenLDAP accepts around an OID in a file.
+// libldap's ldap_int_parse_numericoid and parse_noidlen, under
+// LDAP_SCHEMA_ALLOW_QUOTED: "Netscape puts the SYNTAX value in quotes
+// (incorrectly)" -- and REFEDS's eduperson.ldif still does.
+func (p *parser) openQuote() bool {
+	if p.openldap && p.peek() == '\'' {
+		p.pos++
+		return true
+	}
+	return false
+}
+
+func (p *parser) closeQuote(open bool, v string, err error) (string, error) {
+	if err == nil && open {
+		err = p.expect('\'')
+	}
+	return v, err
+}
+
 // spaces skips WSP and says how many there were.
 func (p *parser) spaces() int {
 	n := 0
-	for p.pos < len(p.s) && p.s[p.pos] == ' ' {
+	for p.pos < len(p.s) && p.isSpace(p.s[p.pos]) {
 		p.pos++
 		n++
 	}
@@ -89,7 +123,10 @@ func (p *parser) word() string {
 	start := p.pos
 	for p.pos < len(p.s) {
 		switch p.s[p.pos] {
-		case ' ', '(', ')', '\'', '$', '{', '}':
+		case '(', ')', '\'', '$', '{', '}':
+			return p.s[start:p.pos]
+		}
+		if p.isSpace(p.s[p.pos]) {
 			return p.s[start:p.pos]
 		}
 		p.pos++
@@ -98,16 +135,36 @@ func (p *parser) word() string {
 }
 
 func (p *parser) numericoid() (string, error) {
+	q := p.openQuote()
+	v, err := p.bareNumericoid()
+	return p.closeQuote(q, v, err)
+}
+
+func (p *parser) bareNumericoid() (string, error) {
 	start := p.pos
 	w := p.word()
-	if !isNumericOID(w) {
-		p.pos = start
-		return "", p.fail("expected a numeric OID, found %q", w)
+	if isNumericOID(w) {
+		return w, nil
 	}
-	return w, nil
+	if _, _, ok := isMacroRef(w); ok && p.macros != nil {
+		oid, err := p.macros.Expand(w)
+		if err != nil {
+			p.pos = start
+			return "", p.fail("expected a numeric OID, found %q, and the OID macro %q %s", w, err.(*MacroError).Name, err.(*MacroError).Msg)
+		}
+		return oid, nil
+	}
+	p.pos = start
+	return "", p.fail("expected a numeric OID, found %q", w)
 }
 
 func (p *parser) oid() (string, error) {
+	q := p.openQuote()
+	v, err := p.bareOID()
+	return p.closeQuote(q, v, err)
+}
+
+func (p *parser) bareOID() (string, error) {
 	start := p.pos
 	w := p.word()
 	if !isOID(w) {
@@ -162,7 +219,7 @@ func (p *parser) qdescrs() ([]string, error) {
 	p.spaces()
 	var out []string
 	for p.peek() != ')' {
-		if len(out) > 0 && p.s[p.pos-1] != ' ' {
+		if len(out) > 0 && !p.isSpace(p.s[p.pos-1]) {
 			return nil, p.fail("expected a space between two names")
 		}
 		d, err := p.qdescr()
@@ -247,7 +304,7 @@ func (p *parser) qdstrings() ([]string, error) {
 	p.spaces()
 	var out []string
 	for p.peek() != ')' {
-		if len(out) > 0 && p.s[p.pos-1] != ' ' {
+		if len(out) > 0 && !p.isSpace(p.s[p.pos-1]) {
 			return nil, p.fail("expected a space between two strings")
 		}
 		s, err := p.qdstring()
@@ -263,20 +320,24 @@ func (p *parser) qdstrings() ([]string, error) {
 
 // noidlen = numericoid [ LCURLY len RCURLY ]
 func (p *parser) noidlen() (oid, bound string, err error) {
-	if oid, err = p.numericoid(); err != nil {
+	q := p.openQuote()
+	if oid, err = p.bareNumericoid(); err != nil {
 		return "", "", err
 	}
-	if p.peek() != '{' {
-		return oid, "", nil
+	if p.peek() == '{' {
+		p.pos++
+		start := p.pos
+		bound = p.word()
+		if !isNumber(bound) {
+			p.pos = start
+			return "", "", p.fail("expected a number in braces, found %q", bound)
+		}
+		if err = p.expect('}'); err != nil {
+			return "", "", err
+		}
 	}
-	p.pos++
-	start := p.pos
-	n := p.word()
-	if !isNumber(n) {
-		p.pos = start
-		return "", "", p.fail("expected a number in braces, found %q", n)
-	}
-	return oid, n, p.expect('}')
+	oid, err = p.closeQuote(q, oid, nil)
+	return oid, bound, err
 }
 
 // A term is one of the keywords of a definition, in the order the ABNF
@@ -382,8 +443,9 @@ func (p *parser) definition(allowed []term, read func(t term, keyword string) er
 func (p *parser) arg() error { return p.sp() }
 
 // ParseSyntax reads a SyntaxDescription (RFC 4512 4.1.5).
-func ParseSyntax(s string) (*Syntax, error) {
-	p := &parser{s: s}
+func ParseSyntax(s string) (*Syntax, error) { return parseSyntax(&parser{s: s}) }
+
+func parseSyntax(p *parser) (*Syntax, error) {
 	out := &Syntax{}
 	oid, exts, err := p.definition([]term{tDesc}, func(_ term, _ string) (err error) {
 		if err = p.arg(); err == nil {
@@ -416,8 +478,9 @@ func (p *parser) common(t term, names *[]string, desc *string, obsolete *bool) (
 }
 
 // ParseMatchingRule reads a MatchingRuleDescription (RFC 4512 4.1.3).
-func ParseMatchingRule(s string) (*MatchingRule, error) {
-	p := &parser{s: s}
+func ParseMatchingRule(s string) (*MatchingRule, error) { return parseMatchingRule(&parser{s: s}) }
+
+func parseMatchingRule(p *parser) (*MatchingRule, error) {
 	out := &MatchingRule{}
 	oid, exts, err := p.definition([]term{tName, tDesc, tObsolete, tSyntax}, func(t term, _ string) (err error) {
 		if t != tSyntax {
@@ -432,7 +495,7 @@ func ParseMatchingRule(s string) (*MatchingRule, error) {
 		return nil, err
 	}
 	if out.Syntax == "" {
-		return nil, &ParseError{Offset: len(s), Msg: "a matching rule must name its SYNTAX (RFC 4512 4.1.3)"}
+		return nil, &ParseError{Offset: len(p.s), Msg: "a matching rule must name its SYNTAX (RFC 4512 4.1.3)"}
 	}
 	out.OID, out.Extensions = oid, exts
 	return out, nil
@@ -468,7 +531,10 @@ var usages = map[string]Usage{
 
 // ParseAttributeType reads an AttributeTypeDescription (RFC 4512 4.1.2).
 func ParseAttributeType(s string) (*AttributeType, error) {
-	p := &parser{s: s}
+	return parseAttributeType(&parser{s: s})
+}
+
+func parseAttributeType(p *parser) (*AttributeType, error) {
 	out := &AttributeType{}
 	order := []term{tName, tDesc, tObsolete, tSup, tEquality, tOrdering, tSubstr,
 		tSyntax, tSingleValue, tCollective, tNoUserMod, tUsage}
@@ -516,15 +582,16 @@ func ParseAttributeType(s string) (*AttributeType, error) {
 	// RFC 4512 4.1.2: "Each attribute type description must contain at least
 	// one of the SUP or SYNTAX fields."
 	if out.Sup == "" && out.Syntax == "" {
-		return nil, &ParseError{Offset: len(s), Msg: "an attribute type needs SUP or SYNTAX (RFC 4512 4.1.2)"}
+		return nil, &ParseError{Offset: len(p.s), Msg: "an attribute type needs SUP or SYNTAX (RFC 4512 4.1.2)"}
 	}
 	out.OID, out.Extensions = oid, exts
 	return out, nil
 }
 
 // ParseObjectClass reads an ObjectClassDescription (RFC 4512 4.1.1).
-func ParseObjectClass(s string) (*ObjectClass, error) {
-	p := &parser{s: s}
+func ParseObjectClass(s string) (*ObjectClass, error) { return parseObjectClass(&parser{s: s}) }
+
+func parseObjectClass(p *parser) (*ObjectClass, error) {
 	out := &ObjectClass{}
 	order := []term{tName, tDesc, tObsolete, tSup, tKind, tMust, tMay}
 	oid, exts, err := p.definition(order, func(t term, kw string) (err error) {

@@ -34,105 +34,45 @@ type Schema struct {
 	oidOf map[string]string
 }
 
-// A File is a set of definitions in the form the embedded files use, which
-// is the form of OpenLDAP's .schema files: a definition starts with its kind
-// -- ldapsyntax, matchingrule, attributetype or objectclass -- at the start
-// of a line and continues on the lines that start with white space; '#'
-// starts a comment line.
-//
-// The continuation lines are joined with ONE space, so a definition copied
-// from an RFC keeps the RFC's line breaks and reads as RFC 4512 4.1 wants it.
-type File struct {
-	Name string
-	Data []byte
-}
-
-// A FileError is a definition in a File that could not be read, and where.
-type FileError struct {
-	File string
-	Line int
-	Err  error
-}
-
-func (e *FileError) Error() string { return fmt.Sprintf("%s:%d: %v", e.File, e.Line, e.Err) }
-func (e *FileError) Unwrap() error { return e.Err }
-
-// definitions is a File read into its parts, in order.
-type definitions struct {
-	syntaxes []*Syntax
-	rules    []*MatchingRule
-	types    []*AttributeType
-	classes  []*ObjectClass
-}
-
-func (d *definitions) read(f File) error {
-	lines := strings.Split(string(f.Data), "\n")
-	for i := 0; i < len(lines); i++ {
-		l := strings.TrimRight(lines[i], " \t\r")
-		if l == "" || l[0] == '#' {
-			continue
-		}
-		if l[0] == ' ' || l[0] == '\t' {
-			return &FileError{f.Name, i + 1, fmt.Errorf("a continuation line with no definition before it")}
-		}
-		first := i + 1
-		kind, def := l, ""
-		if i := strings.IndexAny(l, " \t"); i >= 0 {
-			kind, def = l[:i], l[i+1:]
-		}
-		parts := []string{strings.TrimSpace(def)}
-		for i+1 < len(lines) {
-			n := strings.TrimRight(lines[i+1], " \t\r")
-			if n == "" || (n[0] != ' ' && n[0] != '\t') {
-				break
-			}
-			parts = append(parts, strings.TrimLeft(n, " \t"))
-			i++
-		}
-		text := strings.Join(parts, " ")
-		var err error
-		switch strings.ToLower(kind) {
-		case "ldapsyntax":
-			var x *Syntax
-			if x, err = ParseSyntax(text); err == nil {
-				d.syntaxes = append(d.syntaxes, x)
-			}
-		case "matchingrule":
-			var x *MatchingRule
-			if x, err = ParseMatchingRule(text); err == nil {
-				d.rules = append(d.rules, x)
-			}
-		case "attributetype":
-			var x *AttributeType
-			if x, err = ParseAttributeType(text); err == nil {
-				d.types = append(d.types, x)
-			}
-		case "objectclass":
-			var x *ObjectClass
-			if x, err = ParseObjectClass(text); err == nil {
-				d.classes = append(d.classes, x)
-			}
-		default:
-			err = fmt.Errorf("%q is not a kind of definition (ldapsyntax, matchingrule, attributetype, objectclass)", kind)
-		}
-		if err != nil {
-			return &FileError{f.Name, first, err}
-		}
-	}
-	return nil
-}
-
 // Build reads the files, in order, into one Schema, and checks that every
-// definition refers only to definitions that are there.
+// definition refers only to definitions that are there. It is Read, then
+// BuildFrom.
 //
 // A definition may refer to one later in the same file or in a later file:
 // the RFCs list attribute types alphabetically, so 'cn' (SUP name) comes
 // before 'name' in RFC 4519.
 func Build(files ...File) (*Schema, error) {
-	var d definitions
-	for _, f := range files {
-		if err := d.read(f); err != nil {
-			return nil, err
+	d, err := Read(files...)
+	if err != nil {
+		return nil, err
+	}
+	return BuildFrom(d)
+}
+
+// BuildFrom links definitions already read -- by Read, or decoded from
+// another form such as HCL (package schema/hclschema) -- into one Schema,
+// with every check Build makes. The definitions are copied, so the same
+// Definitions may be built again, or into several schemas.
+func BuildFrom(defs ...*Definitions) (*Schema, error) {
+	d := &Definitions{}
+	for _, x := range defs {
+		for _, e := range x.Syntaxes {
+			c := *e
+			d.Syntaxes = append(d.Syntaxes, &c)
+		}
+		for _, e := range x.MatchingRules {
+			c := *e
+			d.MatchingRules = append(d.MatchingRules, &c)
+		}
+		for _, e := range x.AttributeTypes {
+			c := *e
+			c.sup, c.equality, c.ordering, c.sub, c.syntax, c.linked = nil, nil, nil, nil, "", false
+			d.AttributeTypes = append(d.AttributeTypes, &c)
+		}
+		for _, e := range x.ObjectClasses {
+			c := *e
+			c.sup, c.must, c.may = nil, nil, nil
+			d.ObjectClasses = append(d.ObjectClasses, &c)
 		}
 	}
 	s := &Schema{
@@ -144,26 +84,26 @@ func Build(files ...File) (*Schema, error) {
 		appliesTo:   map[string]map[*AttributeType]bool{},
 		oidOf:       map[string]string{},
 	}
-	for _, x := range d.syntaxes {
+	for _, x := range d.Syntaxes {
 		if s.syntaxByOID[x.OID] != nil {
 			return nil, fmt.Errorf("schema: the syntax %s is defined twice", x.OID)
 		}
 		s.syntaxByOID[x.OID] = x
 		s.syntaxes = append(s.syntaxes, x)
 	}
-	for _, x := range d.rules {
+	for _, x := range d.MatchingRules {
 		if err := index(s, s.ruleBy, x, x.OID, x.Names, "matching rule"); err != nil {
 			return nil, err
 		}
 		s.rules = append(s.rules, x)
 	}
-	for _, x := range d.types {
+	for _, x := range d.AttributeTypes {
 		if err := index(s, s.typeBy, x, x.OID, x.Names, "attribute type"); err != nil {
 			return nil, err
 		}
 		s.types = append(s.types, x)
 	}
-	for _, x := range d.classes {
+	for _, x := range d.ObjectClasses {
 		if err := index(s, s.classBy, x, x.OID, x.Names, "object class"); err != nil {
 			return nil, err
 		}
