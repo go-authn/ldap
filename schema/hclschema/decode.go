@@ -227,8 +227,12 @@ func literal(e hcl.Expression) bool {
 	case *hclsyntax.LiteralValueExpr:
 		return true
 	case *hclsyntax.TemplateExpr:
+		// The text of a template is string literals; an interpolation,
+		// even of a literal ("${2}"), is a part of another type or
+		// another expression.
 		for _, p := range e.Parts {
-			if _, ok := p.(*hclsyntax.LiteralValueExpr); !ok {
+			l, ok := p.(*hclsyntax.LiteralValueExpr)
+			if !ok || l.Val.Type() != cty.String {
 				return false
 			}
 		}
