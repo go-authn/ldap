@@ -188,9 +188,10 @@ func (c *ObjectClass) print(w *printer) string {
 // are written with the macro that covers most of them, "supannAttr:14",
 // as an OpenLDAP schema author writes them. Without, every OID is numeric.
 //
-// The macros must resolve (see Resolve); an error says which does not.
+// The macros must define in their order (see Macros); an error says which
+// does not.
 func (d *Definitions) Format(macros bool) ([]byte, error) {
-	m, err := Resolve(d.ObjectIdentifiers)
+	m, err := Macros(d.ObjectIdentifiers)
 	if err != nil {
 		return nil, err
 	}
@@ -199,16 +200,8 @@ func (d *Definitions) Format(macros bool) ([]byte, error) {
 		short = m.Compress
 	}
 	var b strings.Builder
-	defined := map[string]bool{}
-	for len(defined) < len(m.order) {
-		for _, o := range m.order {
-			name, _, _ := isMacroRef(o.OID)
-			if defined[o.Name] || !(isNumericOID(o.OID) || defined[name]) {
-				continue
-			}
-			defined[o.Name] = true
-			b.WriteString("objectidentifier " + o.Name + " " + o.OID + "\n")
-		}
+	for _, o := range m.order {
+		b.WriteString("objectidentifier " + o.Name + " " + o.OID + "\n")
 	}
 	var bad error
 	def := func(kind string, x printed) {

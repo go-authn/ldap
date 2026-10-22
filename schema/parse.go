@@ -388,6 +388,7 @@ func (p *parser) definition(allowed []term, read func(t term, keyword string) er
 		rank[t] = i
 	}
 	next := 0 // the first term still allowed
+	seen := map[term]bool{}
 	var exts []Extension
 	for {
 		n := p.spaces()
@@ -398,7 +399,10 @@ func (p *parser) definition(allowed []term, read func(t term, keyword string) er
 			}
 			return oid, exts, nil
 		}
-		if n == 0 {
+		// libldap needs no white space between two terms: get_token stops
+		// a word at a quote or a parenthesis (libraries/libldap/schema.c),
+		// and samba.ldif, folded per RFC 2849, has "...Outgoing'DESC".
+		if n == 0 && !p.openldap {
 			return "", nil, p.fail("expected a space or ')', found %s", p.found())
 		}
 		start := p.pos
@@ -424,11 +428,20 @@ func (p *parser) definition(allowed []term, read func(t term, keyword string) er
 			}
 			return "", nil, p.fail("%q is not a term of this definition", kw)
 		}
-		if exts != nil {
+		switch {
+		case p.openldap:
+			// libldap, ldap_str2attributetype and the others: "Beyond this
+			// point we will be liberal and accept the items in any order",
+			// and a term seen twice is LDAP_SCHERR_DUPOPT.
+			if seen[t] {
+				p.pos = start
+				return "", nil, p.fail("%s is repeated", up)
+			}
+			seen[t] = true
+		case exts != nil:
 			p.pos = start
 			return "", nil, p.fail("%s after an extension: extensions come last (RFC 4512 4.1)", up)
-		}
-		if r < next {
+		case r < next:
 			p.pos = start
 			return "", nil, p.fail("%s is out of order or repeated (RFC 4512 4.1 fixes the order of the terms)", up)
 		}

@@ -122,40 +122,76 @@ func lines(data []byte) []string {
 	return ls
 }
 
-// readSchema reads the .schema form. slapd's own reader is fp_getline in
-// servers/slapd/config.c: a line that starts with white space continues
-// the one before, and a blank or comment line ends a definition.
+// MaxLineLength is slapd.conf(5)'s: "No physical line should be over 2000
+// bytes long." slapd reads a longer one in pieces (fgets into a buffer in
+// fp_getline), which no schema author means; it is refused here.
+const MaxLineLength = 2000
+
+func isBlank(c byte) bool { return c == ' ' || c == '\t' }
+
+// readSchema reads the .schema form exactly as slapd's fp_getline
+// (servers/slapd/config.c) unwraps it, and slapd.conf(5) says:
+//
+//	If a line begins with white space, it is considered a continuation of
+//	the previous line. [...] Blank lines and comment lines beginning with
+//	a `#' character are ignored. Note: continuation lines are unwrapped
+//	before comment processing is applied.
+//
+// fp_getline replaces the first white space character of a continuation
+// line with ONE space and keeps the rest of the line as it is, so a DESC
+// folded inside its quotes keeps the indentation after the first
+// character. A line that ends in a single backslash is joined to the next
+// with nothing between them. An indented line after a comment line is part
+// of the comment.
 func (d *Definitions) readSchema(f File, m *OIDMacros) error {
 	ls := lines(f.Data)
+	for i, l := range ls {
+		if len(l) > MaxLineLength {
+			return &FileError{f.Name, i + 1, 0, fmt.Errorf("the line is %d bytes, more than the %d slapd.conf(5) allows", len(l), MaxLineLength)}
+		}
+	}
 	for i := 0; i < len(ls); i++ {
-		l := strings.TrimRight(ls[i], " \t")
-		if l == "" || l[0] == '#' {
+		text, first := ls[i], i+1
+		if text == "" {
 			continue
 		}
-		if l[0] == ' ' || l[0] == '\t' {
-			return &FileError{f.Name, i + 1, 0, errors.New("a continuation line with no definition before it")}
+		if isBlank(text[0]) {
+			if strings.TrimLeft(text, " \t") == "" {
+				continue // white space after a blank line: nothing to continue
+			}
+			return &FileError{f.Name, first, 0, errors.New("a continuation line with no definition before it")}
 		}
-		kind, def := l, ""
-		start := len(l)
-		if k := strings.IndexAny(l, " \t"); k >= 0 {
-			kind = l[:k]
-			start = k + 1 + len(l[k+1:]) - len(strings.TrimLeft(l[k+1:], " \t"))
-			def = l[start:]
-		}
-		at := spans{{0, i + 1, start + 1}}
-		text := def
+		at := spans{{0, first, 1}}
 		for i+1 < len(ls) {
-			n := strings.TrimRight(ls[i+1], " \t")
-			if n == "" || (n[0] != ' ' && n[0] != '\t') {
+			next := ls[i+1]
+			if strings.HasSuffix(text, `\`) && !strings.HasSuffix(text, `\\`) {
+				text = text[:len(text)-1]
+				i++
+				at = append(at, span{len(text), i + 1, 1})
+				text += next
+				continue
+			}
+			if next == "" || !isBlank(next[0]) {
 				break
 			}
 			i++
-			trimmed := strings.TrimLeft(n, " \t")
-			text += " "
-			at = append(at, span{len(text), i + 1, len(n) - len(trimmed) + 1})
-			text += trimmed
+			at = append(at, span{len(text), i + 1, 1})
+			text += " " + next[1:]
 		}
-		if err := d.add(f.Name, strings.ToLower(kind), kind, text, at, m); err != nil {
+		if text[0] == '#' {
+			continue
+		}
+		kind, start := text, len(text)
+		if k := strings.IndexAny(text, " \t"); k >= 0 {
+			kind = text[:k]
+			start = len(text) - len(strings.TrimLeft(text[k:], " \t"))
+		}
+		def := strings.TrimRight(text[start:], " \t")
+		rel := make(spans, 0, len(at))
+		for _, s := range at {
+			rel = append(rel, span{s.off - start, s.line, s.col})
+		}
+		if err := d.add(f.Name, strings.ToLower(kind), kind, def, rel, m); err != nil {
 			return err
 		}
 	}
