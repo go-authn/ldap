@@ -58,7 +58,7 @@ func TestReadSchemaFormAsSlapdDoes(t *testing.T) {
 		"attributetype ( attrs:7",
 		"\tSYNTAX '1.3.6.1.4.1.1466.115.121.1.15{32}'", // quoted, as libldap allows
 		"\tNAME ( 'x'\t'y' ) EQUALITY caseIgnoreMatch", // any order, tabs as space
-		"\tDESC 'd'SINGLE-VALUE )",                      // no space after a quote
+		"\tDESC 'd'SINGLE-VALUE )",                     // no space after a quote
 		"objectclass ( base:2 NAME 'c' MAY 'x' AUXILIARY SUP top )",
 		"ldapsyntax ( base:3 DESC 's' )",
 		"matchingrule ( base:4 NAME 'm' SYNTAX base:3 )",
