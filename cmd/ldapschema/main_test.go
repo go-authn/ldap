@@ -145,7 +145,7 @@ func TestUsageAndFailures(t *testing.T) {
 		{[]string{"to-hcl", "--nope", bad}, 2, "", "ldapschema: unknown flag: --nope"},
 		{[]string{"to-hcl", bad}, 1, "", `bad.schema:1: "bogus" is not a kind of definition`},
 		{[]string{"to-hcl", big}, 1, "", "more than the 4194304 a schema file may have"},
-		{[]string{"to-hcl", dir}, 1, "", "is a directory"},
+		{[]string{"to-hcl", dir}, 1, "", "ldapschema: read " + dir}, // the wording is the OS's
 		{[]string{"to-hcl", twice}, 1, "", "the attribute type a has the extension X-A twice"},
 		{[]string{"to-schema", bad}, 1, "", "Argument or block definition required"},
 		{[]string{"to-schema", badHCL}, 1, "", "bad.hcl:1:1: Argument or block definition required"},

@@ -1,0 +1,5 @@
+# The published schema fixtures are checked by SHA-256 and read byte for
+# byte: a checkout must not turn their LF into CRLF (core.autocrlf on
+# Windows runners).
+cmd/ldapschema/testdata/** -text
+schema/testdata/** -text
