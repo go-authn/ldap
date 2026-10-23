@@ -148,7 +148,9 @@ was; nothing changes for a deployment that does not set it.
 - Types for syntaxes, matching rules, matching rule uses, attribute types
   and object classes, and a parser and printer for their RFC 4512 4.1 forms.
   The parser is strict -- terms in the ABNF's order, SP is spaces -- and a
-  refusal says at which byte (`*schema.ParseError`). Printing and parsing
+  refusal says at which byte (`*schema.ParseError`). Files are read as
+  slapd reads them; see
+  [Schema files, OID macros and LDIF](#schema-files-oid-macros-and-ldif). Printing and parsing
   round-trip; `FuzzDefinition` checks it.
 - `schema.Build(files...)` links definitions into a read-only `*Schema`:
   every SUP, rule, syntax, MUST and MAY must resolve, and RFC 4512's rules
@@ -234,7 +236,205 @@ still makes `>=` Undefined.
 - RFC 4518's repertoire is the Unicode version Go ships, not Unicode 3.2;
   case folding is full Unicode folding around NFKC, which is what RFC 3454
   table B.2 is built to give, not that table byte for byte.
-- OpenLDAP's `objectIdentifier` macros in `.schema` files.
+- In HCL, two extensions with the same name in one definition. RFC 4512
+  allows it, but one map cannot hold it, so `Encode` refuses it. None of the
+  published files measured below does it.
+- `include` directives and `ldapsyntax`'s `X-SUBST` substitution: a
+  `.schema` file is read as definitions, and is not run as a slapd
+  configuration.
+
+### Schema files, OID macros and LDIF
+
+`schema.Read(files...)` reads definitions without linking them
+(`*schema.Definitions`), and `schema.BuildFrom(defs...)` links them with every
+check `Build` makes. `Build` is `Read` followed by `BuildFrom`.
+`(*Definitions).Format(macros)` writes them back as a `.schema` file that
+`Read` reads back to the same values.
+
+A file is read the way slapd reads it, because published files are written
+for slapd:
+
+- **Two forms.** A file whose first line that is not a comment is
+  `name: value` is LDIF (RFC 2849). That covers OpenLDAP's cn=config form
+  (`olcObjectIdentifier`, `olcLdapSyntaxes`, `olcAttributeTypes`,
+  `olcObjectClasses`, with the `{N}` prefix stripped, slapd-config(5)) and
+  the subschema subentry's own attributes (RFC 4512 4.2). Anything else is
+  the `.schema` form (slapd.conf(5)).
+- **Two kinds of line continuation.** In a `.schema` file, a line that starts
+  with white space continues the line before it. slapd's `fp_getline`
+  replaces that first white space character with one space and keeps the
+  rest. A line that ends with a backslash joins the next one with nothing
+  between them. Comments are removed after the lines are joined. In LDIF, a
+  continuation line starts with exactly ONE space, and that space is
+  removed. A DESC folded mid-word therefore reads differently in the two
+  forms, and a test checks both. Base64 values (`attr::`) are decoded after
+  the lines are joined.
+- **The liberal parser.** libldap's own (`libraries/libldap/schema.c`:
+  "Beyond this point we will be liberal and accept the items in any
+  order"). Terms may come in any order, and a term given twice is refused.
+  Tabs are white space. An OID may be quoted (REFEDS's `eduperson.ldif`
+  writes `SYNTAX '1.3.6...'`). No space is needed after a quote (Samba's
+  `samba.ldif` has `...Outgoing'DESC`). The exported `Parse*` functions,
+  and what a server publishes, stay strict RFC 4512.
+- **OID macros** (`objectidentifier name oid`, slapd.conf(5); `servers/slapd/oidm.c`):
+  - `name:suffix` is the macro's OID, a dot, then the suffix.
+  - Macros may chain, but only to macros defined EARLIER: the value is
+    expanded once, when the macro is defined. So a cycle cannot be written.
+  - Names are case-sensitive.
+  - A name may be defined twice only to the same OID.
+  - Unlike slapd, the suffix is checked to be numbers and dots.
+  - A macro is expanded where slapd expands one: the OID of a definition and
+    the SYNTAX of an attribute type. It is also expanded in the other
+    numeric-OID positions of RFC 4512 4.1. It is never expanded in SUP,
+    EQUALITY, MUST or MAY, which slapd looks up by name.
+  - An undefined macro is refused with its file, line and column:
+    `f:3:18: ... the OID macro "zz" is not defined before it is used`.
+- **Bounds.** A file is at most 4 MiB (`schema.MaxFileSize`). A physical
+  line in a `.schema` file is at most 2,000 bytes, as slapd.conf(5) says.
+  `FuzzRead` and `FuzzMacros` fuzz the reader and the expander.
+
+### Schemas in HCL: package `schema/hclschema`
+
+`hclschema.Decode(files...)` reads HCL2 into the same `*schema.Definitions`.
+`hclschema.Encode(defs, opts)` writes them back. The package is separate, so
+`schema` itself has no HCL dependency.
+
+```hcl
+object_identifier "supann" {
+  oid = "1.3.6.1.4.1.7135.1"
+}
+
+object_identifier "supannAttr" {
+  oid = "supann:2.1"
+}
+
+attribute_type "supannEtablissement" {
+  oid        = "supannAttr:14"
+  desc       = "code d etablissement"
+  equality   = "caseIgnoreMatch"
+  syntax     = "1.3.6.1.4.1.1466.115.121.1.15"
+  syntax_len = 128
+}
+
+object_class "supannPerson" {
+  oid        = "supann:2.2.1"
+  sup        = ["top"]
+  kind       = "auxiliary"
+  may        = ["supannEtablissement"]
+  extensions = { "X-ORIGIN" = ["SUPANN 2021"] }
+}
+```
+
+The example is the one `TestDecodeTheExample` decodes and builds.
+
+- **One block per definition.** The block type is the kind of definition:
+  `object_identifier`, `ldap_syntax`, `matching_rule`, `attribute_type` or
+  `object_class`.
+- **The label** is the first NAME. `names` lists the others. A definition
+  with no NAME is labelled with its OID and has no `oid`. A syntax never has
+  a NAME.
+- **The attributes are RFC 4512 4.1's terms**, in lower case with
+  underscores: `desc`, `obsolete`, `sup`, `equality`, `ordering`, `substr`,
+  `syntax`, `single_value`, `collective`, `no_user_modification`, `usage`,
+  `kind`, `must`, `may`.
+  - The `{len}` of noidlen is `syntax_len`, a number, because it is not part
+    of the OID.
+  - `extensions` maps each `X-` name to its list of strings. It is read item
+    by item from the source, so its order survives.
+  - A term left out has RFC 4512's default: STRUCTURAL, userApplications, not
+    OBSOLETE. `Encode` leaves defaults out.
+- **Literals only.** A value is a quoted string, a number, a boolean or a
+  list of those. A variable, a function, an operator or a `${...}`/`%{...}`
+  template is refused before evaluation, including `"${2}"`. `Encode`
+  escapes `${`, `%{`, quotes, backslashes and control characters. A test
+  round-trips a DESC that holds all of them.
+- **Checks.** Each field is checked with the strict RFC 4512 parser itself,
+  so HCL accepts exactly what RFC 4512 does. The checks that need positions
+  are made at decode time, with the file, line and column:
+  - a definition given twice;
+  - an attribute type without SUP or SYNTAX;
+  - COLLECTIVE that is not userApplications;
+  - NO-USER-MODIFICATION on a user attribute;
+  - unknown keys.
+
+  `schema.BuildFrom` then makes the cross-reference checks.
+- **Macros follow slapd's rule.** An `object_identifier` may be used after
+  it is defined, in the order of the files and of the blocks in them.
+  `Encode` writes numeric OIDs by default. A numeric OID is what a client
+  sees in the subschema, it can be searched for, and a block that carries
+  one can be moved on its own. `EncodeOptions{Macros: true}` writes
+  `supannAttr:14` instead. The `object_identifier` blocks are written either
+  way.
+- **Deterministic output.** The same definitions always encode to the same
+  bytes. Kinds come in the order above. Within a kind, definitions keep the
+  order of their source. Within a block, terms come in RFC 4512's order.
+  `FuzzDecode` checks that what decodes round-trips and re-encodes to the
+  same bytes. Strings are NFC-normalised, as every HCL string is.
+
+### The converter: `cmd/ldapschema`
+
+```
+go install github.com/go-authn/ldap/cmd/ldapschema@latest
+
+ldapschema to-hcl [--macros] FILE...     .schema, cn=config LDIF or subschema LDIF -> HCL
+ldapschema to-schema [--macros] FILE...  HCL -> OpenLDAP .schema
+ldapschema check FILE...                 build on top of schema.Standard() and report
+```
+
+Output goes to stdout.
+
+- **Exit status:** 0 when the command worked, 1 when a file or a definition
+  is refused, 2 on a usage error.
+- **`check`** reads `*.hcl` as HCL, and any other file as `.schema` or LDIF.
+  It reports:
+  - the definitions `schema.Standard()` already has, identical or not. A
+    difference in DESC alone is counted; every other difference is listed
+    with its fields.
+  - EVERY reference that nothing defines. `Build` stops at the first.
+  - the verdict of `BuildFrom`.
+
+From `TestConvertBothWays`:
+
+```
+$ ldapschema to-schema --macros site.hcl
+objectidentifier site 1.3.6.1.4.1.99999
+objectidentifier siteAttr site:1
+
+attributetype ( siteAttr:1
+	NAME 'siteBadge'
+	DESC 'the badge number'
+	EQUALITY caseIgnoreMatch
+	SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{32}
+	SINGLE-VALUE )
+[...]
+```
+
+**Measured on the published files** (`cmd/ldapschema/published_test.go`).
+For each file, three round trips give equal definition values:
+
+- `.schema` -> HCL -> definitions;
+- HCL -> `.schema` -> definitions;
+- LDIF -> definitions, compared with `.schema` -> definitions.
+
+| File | Definitions | LDIF vs `.schema` | `check` on Standard() |
+|---|---|---|---|
+| OpenLDAP core | 52 types, 27 classes, 47 macros | equal | 1: `presentationAddress` needs syntax ...1.43 and `presentationAddressMatch`, which slapd builds in |
+| OpenLDAP cosine | 41 types, 13 classes | equal | 1: syntaxes ...1.19 and ...1.13 (dropped by RFC 4517), and `rfc822Mailbox`, `homeTelephoneNumber` and `dsa` |
+| OpenLDAP inetorgperson | 9 types, 1 class | equal | 0: all already there |
+| OpenLDAP nis | 25 types, 13 classes | equal | 0: all already there |
+| SUPANN 2021 (RENATER) | 67 types, 8 classes | equal | 0: 75 added, no eduPerson needed |
+| eduPerson (REFEDS) | 16 types, 1 class | the class differs: the `.schema` (202111) has `eduPersonAnalyticsTag` in MAY, and the `.ldif` (202208) does not | 0: 17 added |
+| Samba | 58 types, 12 classes | equal | 0: 70 added |
+
+Only OpenLDAP's files are committed, under the OpenLDAP Public License 2.8.
+
+- SUPANN carries no licence.
+- eduPerson is CC BY-NC-SA 4.0.
+- Samba is GPL-3.0.
+
+Those are downloaded when `LDAP_SCHEMA_NETWORK=1` is set, and each is checked
+against a SHA-256 recorded with its URL and date. A change upstream is
+reported, not tested silently.
 
 **Why golang.org/x/text.** RFC 4518 2.3 requires NFKC, and 2.2 full case
 folding. Without NFKC a precomposed `é` (U+00E9) and `e` + U+0301 -- what a

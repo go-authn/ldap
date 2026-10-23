@@ -113,6 +113,20 @@ jobs:
             exit 1
           fi
 
+  published-schemas:
+    # SUPANN, eduPerson and Samba cannot be committed (no licence, CC
+    # BY-NC-SA 4.0, GPL-3.0): this lane downloads them, checks the SHA-256
+    # recorded in cmd/ldapschema/published_test.go, and round-trips them.
+    name: published schemas (downloaded)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: '1.27.2', check-latest: true, cache: true }
+      - run: go test -count=1 -run TestPublishedSchemas -v ./cmd/ldapschema
+        env:
+          LDAP_SCHEMA_NETWORK: "1"
+
   arches:
     name: arch ${{ matrix.goarch }}
     runs-on: ubuntu-latest
