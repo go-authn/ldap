@@ -178,7 +178,9 @@ func (d *Definitions) readSchema(f File, m *OIDMacros) error {
 			at = append(at, span{len(text), i + 1, 1})
 			text += " " + next[1:]
 		}
-		if text[0] == '#' {
+		// A lone backslash joined to an empty line leaves nothing (found by
+		// FuzzRead: "\\\n" indexed an empty line).
+		if text == "" || text[0] == '#' {
 			continue
 		}
 		kind, start := text, len(text)
