@@ -220,7 +220,7 @@ func diffKind[T any](kind string, a, b []*T) []string {
 		switch {
 		case !ok:
 			out = append(out, fmt.Sprintf("%s %s: only in the first", kind, oidOf(x)))
-		case !reflect.DeepEqual(x, y):
+		case len(fieldsThatDiffer(x, y)) > 0: // Pos, where each reading found it, aside
 			out = append(out, fmt.Sprintf("%s %s: %s", kind, oidOf(x), strings.Join(fieldsThatDiffer(x, y), ", ")))
 		}
 		delete(byOID, oidOf(x))

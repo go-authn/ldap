@@ -282,7 +282,7 @@ func keepNew[T any](std, given []*T, name func(*T) string, same, differ *[]strin
 		switch {
 		case !dup:
 			out = append(out, x)
-		case reflect.DeepEqual(s, x):
+		case len(fieldsThatDiffer(s, x)) == 0:
 			*same = append(*same, name(x))
 		default:
 			*differ = append(*differ, fmt.Sprintf("%s (%s)", name(x), strings.Join(fieldsThatDiffer(s, x), ", ")))
@@ -291,12 +291,14 @@ func keepNew[T any](std, given []*T, name func(*T) string, same, differ *[]strin
 	return out
 }
 
+// fieldsThatDiffer compares what two definitions say: Pos, where each was
+// read from, is not part of a definition.
 func fieldsThatDiffer(a, b any) []string {
 	va, vb := reflect.ValueOf(a).Elem(), reflect.ValueOf(b).Elem()
 	var out []string
 	for i := range va.NumField() {
 		f := va.Type().Field(i)
-		if f.IsExported() && !reflect.DeepEqual(va.Field(i).Interface(), vb.Field(i).Interface()) {
+		if f.IsExported() && f.Name != "Pos" && !reflect.DeepEqual(va.Field(i).Interface(), vb.Field(i).Interface()) {
 			out = append(out, f.Name)
 		}
 	}

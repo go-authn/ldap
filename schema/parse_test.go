@@ -16,13 +16,42 @@ func strip(x any) any {
 	case *AttributeType:
 		c := *v
 		c.sup, c.equality, c.ordering, c.sub, c.syntax, c.linked = nil, nil, nil, nil, "", false
+		c.Pos = Position{}
 		return &c
 	case *ObjectClass:
 		c := *v
 		c.sup, c.must, c.may = nil, nil, nil
+		c.Pos = Position{}
+		return &c
+	case *MatchingRule:
+		c := *v
+		c.Pos = Position{}
+		return &c
+	case *Syntax:
+		c := *v
+		c.Pos = Position{}
 		return &c
 	}
 	return x
+}
+
+// unplaced is d without the positions Read gives each definition: what the
+// definitions SAY, for comparing two readings of different text.
+func unplaced(d *Definitions) *Definitions {
+	out := &Definitions{ObjectIdentifiers: d.ObjectIdentifiers}
+	for _, x := range d.Syntaxes {
+		out.Syntaxes = append(out.Syntaxes, strip(x).(*Syntax))
+	}
+	for _, x := range d.MatchingRules {
+		out.MatchingRules = append(out.MatchingRules, strip(x).(*MatchingRule))
+	}
+	for _, x := range d.AttributeTypes {
+		out.AttributeTypes = append(out.AttributeTypes, strip(x).(*AttributeType))
+	}
+	for _, x := range d.ObjectClasses {
+		out.ObjectClasses = append(out.ObjectClasses, strip(x).(*ObjectClass))
+	}
+	return out
 }
 
 // ⛔ The printer writes what the server PUBLISHES, so every embedded

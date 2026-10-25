@@ -1,0 +1,220 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
+package schema
+
+import (
+	"encoding/base64"
+	"errors"
+	"strings"
+	"testing"
+)
+
+// buildErr is the BuildError a build of base and extra returns, or fails.
+func buildErr(t *testing.T, extra string) *BuildError {
+	t.Helper()
+	_, err := build(extra)
+	var be *BuildError
+	if !errors.As(err, &be) {
+		t.Fatalf("%q: %v is not a *BuildError", extra, err)
+	}
+	return be
+}
+
+// Every kind of BuildError, each from a real input, with everything it says.
+// Each refused definition starts on line 3 of "extra", after a comment and a
+// blank line, and is folded over two lines: its position is the line it
+// starts on. base (schema_test.go) defines, on its lines 2 to 5, the syntax
+// 1.1.1, the rule eq, the type a and the abstract class top.
+func TestEveryBuildErrorKind(t *testing.T) {
+	at := func(file string, line int) Position { return Position{file, line, 1} }
+	for _, c := range []struct {
+		extra                 string
+		kind                  BuildErrorKind
+		el                    Element
+		oid, name, field, ref string
+		refOID                string
+		pos, refPos           Position
+		says                  string
+	}{
+		{"ldapsyntax ( 1.1.1\n DESC 'again' )", DuplicateOID, ElementSyntax, "1.1.1", "", "", "1.1.1", "1.1.1", at("extra", 3), at("base", 2),
+			"extra:3:1: schema: the syntax 1.1.1 is defined twice (first defined at base:2:1)"},
+		{"matchingrule ( 1.1.2 NAME 'other'\n SYNTAX 1.1.1 )", DuplicateOID, ElementMatchingRule, "1.1.2", "other", "", "eq", "1.1.2", at("extra", 3), at("base", 3),
+			"extra:3:1: schema: the matching rule 1.1.2 is defined twice (first defined at base:3:1)"},
+		{"attributetype ( 1.1.3\n SUP a )", DuplicateOID, ElementAttributeType, "1.1.3", "", "", "a", "1.1.3", at("extra", 3), at("base", 4),
+			"schema: the attribute type 1.1.3 is defined twice"},
+		{"objectclass ( 1.1.4\n SUP top )", DuplicateOID, ElementObjectClass, "1.1.4", "", "", "top", "1.1.4", at("extra", 3), at("base", 5),
+			"schema: the object class 1.1.4 is defined twice"},
+		{"matchingrule ( 1.9 NAME 'EQ'\n SYNTAX 1.1.1 )", DuplicateName, ElementMatchingRule, "1.9", "EQ", "NAME", "EQ", "1.1.2", at("extra", 3), at("base", 3),
+			`extra:3:1: schema: the name "EQ" is given to two matching rules (first defined at base:3:1)`},
+		{"attributetype ( 1.9 NAME ( 'x' 'A' )\n SUP a )", DuplicateName, ElementAttributeType, "1.9", "x", "NAME", "A", "1.1.3", at("extra", 3), at("base", 4),
+			`name "A" is given to two attribute types`},
+		{"objectclass ( 1.9 NAME 'TOP'\n SUP top )", DuplicateName, ElementObjectClass, "1.9", "TOP", "NAME", "TOP", "1.1.4", at("extra", 3), at("base", 5),
+			`name "TOP" is given to two object classes`},
+		{"matchingrule ( 1.9 NAME 'm'\n SYNTAX 9.9 )", UnknownReference, ElementMatchingRule, "1.9", "m", "SYNTAX", "9.9", "", at("extra", 3), Position{},
+			"extra:3:1: schema: the matching rule m has the syntax 9.9, which is not defined"},
+		{"attributetype ( 1.9 NAME 'x'\n EQUALITY nope SYNTAX 1.1.1 )", UnknownReference, ElementAttributeType, "1.9", "x", "EQUALITY", "nope", "", at("extra", 3), Position{},
+			"EQUALITY rule nope, which is not defined"},
+		{"attributetype ( 1.9\n ORDERING nope SYNTAX 1.1.1 )", UnknownReference, ElementAttributeType, "1.9", "", "ORDERING", "nope", "", at("extra", 3), Position{},
+			"extra:3:1: schema: the attribute type 1.9 has the ORDERING rule nope"},
+		{"attributetype ( 1.9\n SUBSTR nope SYNTAX 1.1.1 )", UnknownReference, ElementAttributeType, "1.9", "", "SUBSTR", "nope", "", at("extra", 3), Position{},
+			"SUBSTR rule nope"},
+		{"attributetype ( 1.9\n SYNTAX 9.9 )", UnknownReference, ElementAttributeType, "1.9", "", "SYNTAX", "9.9", "", at("extra", 3), Position{},
+			"has the syntax 9.9, which is not defined"},
+		{"attributetype ( 1.9\n SUP nope )", UnknownReference, ElementAttributeType, "1.9", "", "SUP", "nope", "", at("extra", 3), Position{},
+			"supertype nope, which is not defined"},
+		{"objectclass ( 1.9\n SUP nope )", UnknownReference, ElementObjectClass, "1.9", "", "SUP", "nope", "", at("extra", 3), Position{},
+			"superclass nope, which is not defined"},
+		{"objectclass ( 1.9\n MUST nope )", UnknownReference, ElementObjectClass, "1.9", "", "MUST", "nope", "", at("extra", 3), Position{},
+			"has MUST nope, which is not a defined attribute type"},
+		{"objectclass ( 1.9\n MAY nope )", UnknownReference, ElementObjectClass, "1.9", "", "MAY", "nope", "", at("extra", 3), Position{},
+			"has MAY nope, which is not a defined attribute type"},
+		{"attributetype ( 1.9 NAME 'x'\n SUP y )\nattributetype ( 1.8 NAME 'y' SUP x )", SuperiorCycle, ElementAttributeType, "1.9", "x", "SUP", "", "", at("extra", 3), Position{},
+			"extra:3:1: schema: the attribute type x is its own supertype"},
+		{"objectclass ( 1.9 NAME 'x'\n SUP y )\nobjectclass ( 1.8 NAME 'y' SUP x )", SuperiorCycle, ElementObjectClass, "1.9", "x", "SUP", "", "", at("extra", 3), Position{},
+			"its own superclass"},
+		{"objectclass ( 1.8 SUP s\n ABSTRACT )\nobjectclass ( 1.9 NAME 's' SUP top )", KindViolation, ElementObjectClass, "1.8", "", "SUP", "s", "1.9", at("extra", 3), at("extra", 5),
+			"extra:3:1: schema: the abstract class 1.8 derives from the structural class s (RFC 4512 2.4.1)"},
+		{"objectclass ( 1.8\n SUP x )\nobjectclass ( 1.9 NAME 'x' SUP top AUXILIARY )", KindViolation, ElementObjectClass, "1.8", "", "SUP", "x", "1.9", at("extra", 3), at("extra", 5),
+			"structural class 1.8 derives from the auxiliary class x (RFC 4512 2.4.2)"},
+		{"objectclass ( 1.8 SUP s\n AUXILIARY )\nobjectclass ( 1.9 NAME 's' SUP top )", KindViolation, ElementObjectClass, "1.8", "", "SUP", "s", "1.9", at("extra", 3), at("extra", 5),
+			"auxiliary class 1.8 derives from the structural class s (RFC 4512 2.4.3)"},
+		{"attributetype ( 1.9 SUP a\n USAGE dSAOperation )", UsageMismatch, ElementAttributeType, "1.9", "", "SUP", "a", "1.1.3", at("extra", 3), at("base", 4),
+			"extra:3:1: schema: the attribute type 1.9 is dSAOperation and its supertype a is userApplications (RFC 4512 2.5.1)"},
+		{"attributetype ( 1.8\n SUP c )\nattributetype ( 1.9 NAME 'c' SYNTAX 1.1.1 COLLECTIVE )", CollectiveMismatch, ElementAttributeType, "1.8", "", "SUP", "c", "1.9", at("extra", 3), at("extra", 5),
+			"must be COLLECTIVE like its supertype c"},
+		{"attributetype ( 1.9 SYNTAX 1.1.1\n COLLECTIVE USAGE directoryOperation )", UsageViolation, ElementAttributeType, "1.9", "", "COLLECTIVE", "", "", at("extra", 3), Position{},
+			"extra:3:1: schema: the attribute type 1.9 is COLLECTIVE and directoryOperation (RFC 4512 4.1.2)"},
+		{"attributetype ( 1.9 SYNTAX 1.1.1\n NO-USER-MODIFICATION )", UsageViolation, ElementAttributeType, "1.9", "", "NO-USER-MODIFICATION", "", "", at("extra", 3), Position{},
+			"NO-USER-MODIFICATION and a user attribute"},
+	} {
+		be := buildErr(t, "# refused below\n\n"+c.extra)
+		got := *be
+		got.msg = ""
+		want := BuildError{Kind: c.kind, Element: c.el, OID: c.oid, Name: c.name, Pos: c.pos, Field: c.field, Ref: c.ref, RefOID: c.refOID, RefPos: c.refPos}
+		if got != want {
+			t.Errorf("%q:\n got %+v\nwant %+v", c.extra, got, want)
+		}
+		if !strings.Contains(be.Error(), c.says) {
+			t.Errorf("%q: %q, want %q", c.extra, be.Error(), c.says)
+		}
+	}
+}
+
+// The README's example, on the embedded files: the first definition is
+// named where the standard schema has it.
+func TestBuildErrorTheREADMEShows(t *testing.T) {
+	site := File{"site.schema", []byte(strings.Repeat("\n", 11) + "attributetype ( 2.5.4.3 NAME 'myCn' SUP name )\n")}
+	_, err := Build(append(StandardFiles(), site)...)
+	if want := "site.schema:12:1: schema: the attribute type 2.5.4.3 is defined twice (first defined at rfc4519.schema:42:1)"; err == nil || err.Error() != want {
+		t.Errorf("%v\nwant %s", err, want)
+	}
+}
+
+// Every kind and element is named, and an unknown one says what it is.
+func TestBuildErrorNames(t *testing.T) {
+	want := map[BuildErrorKind]string{UnknownReference: "unknown reference", DuplicateOID: "duplicate OID", DuplicateName: "duplicate name",
+		SuperiorCycle: "superior cycle", KindViolation: "kind violation", UsageMismatch: "usage mismatch",
+		CollectiveMismatch: "collective mismatch", UsageViolation: "usage violation", 0: "BuildErrorKind(0)", 99: "BuildErrorKind(99)"}
+	for k, s := range want {
+		if k.String() != s {
+			t.Errorf("%d: %q, want %q", k, k.String(), s)
+		}
+	}
+	for e, s := range map[Element]string{ElementSyntax: "syntax", ElementMatchingRule: "matching rule",
+		ElementAttributeType: "attribute type", ElementObjectClass: "object class", 0: "Element(0)"} {
+		if e.String() != s {
+			t.Errorf("%d: %q, want %q", e, e.String(), s)
+		}
+	}
+	for p, s := range map[Position]string{{}: "", {"f", 0, 4}: "", {"f", 3, 0}: "f:3", {"f", 3, 7}: "f:3:7"} {
+		if p.String() != s || p.IsValid() != (s != "") {
+			t.Errorf("%+v: %q %v, want %q", p, p.String(), p.IsValid(), s)
+		}
+	}
+}
+
+// What has no position -- definitions built in code -- reads as Build has
+// always worded it; a definition that gives one name twice is its own first
+// definition, and the message does not point at itself.
+func TestBuildErrorWithoutAPosition(t *testing.T) {
+	_, err := BuildFrom(&Definitions{AttributeTypes: []*AttributeType{{OID: "1.1", Sup: "x"}}})
+	var be *BuildError
+	if !errors.As(err, &be) || err.Error() != "schema: the attribute type 1.1 has the supertype x, which is not defined" || be.Pos.IsValid() {
+		t.Errorf("%v", err)
+	}
+	_, err = BuildFrom(&Definitions{Syntaxes: []*Syntax{{OID: "1.1"}, {OID: "1.1"}}})
+	if !errors.As(err, &be) || err.Error() != "schema: the syntax 1.1 is defined twice" {
+		t.Errorf("%v", err)
+	}
+	be = buildErr(t, "\nattributetype ( 1.9 NAME ( 'z' 'Z' ) SUP a )")
+	if be.Kind != DuplicateName || be.RefPos != be.Pos || be.RefOID != "1.9" ||
+		be.Error() != `extra:2:1: schema: the name "Z" is given to two attribute types` {
+		t.Errorf("%+v: %v", be, be)
+	}
+}
+
+// The position is the line a definition STARTS on in the original file, in
+// both forms and in HCL, however the definition is folded: slapd.conf(5)
+// continuation lines and backslash joins, RFC 2849 note 2 continuation lines
+// ("Any line that begins with a single space MUST be treated as a
+// continuation of the previous (non-empty) line"), and a base64 value folded
+// the same way. A definition before it that is folded too must not shift it.
+func TestBuildErrorPositionsInEveryForm(t *testing.T) {
+	def := "( 1.9 NAME 'x' DESC 'folded' SUP nope )"
+	b64 := base64.StdEncoding.EncodeToString([]byte(def))
+	for _, c := range []struct {
+		name, text string
+		line       int
+	}{
+		{"schema", "# a comment\n continued comment\n\nattributetype ( 1.8 NAME 'ok'\n\tSUP a )\nattributetype ( 1.9\n\tNAME 'x'\n\tSUP nope )\n", 6},
+		{"schema backslash", "attributetype ( 1.8 NAME 'ok' \\\nSUP a )\n\nattributetype ( 1.9 NAME \\\n'x' SUP \\\nnope )\n", 4},
+		{"schema CRLF", "attributetype ( 1.8 NAME 'ok'\r\n SUP a )\r\nattributetype ( 1.9\r\n SUP nope )\r\n", 3},
+		{"LDIF", "dn: cn=x,cn=schema,cn=config\nolcAttributeTypes: {0}( 1.8 NAME 'ok' S\n UP a )\nolcAttributeTypes: {1}( 1.9 NAME 'x' DE\n SC 'folded'\n  SUP nope )\n", 4},
+		{"LDIF base64", "dn: cn=Subschema\n# attributeTypes: ( 1.7 )\nattributeTypes: ( 1.8 NAME 'ok'\n  SUP a )\nattributeTypes:: " + b64[:12] + "\n " + b64[12:30] + "\n " + b64[30:] + "\n", 5},
+	} {
+		be := buildErr(t, c.text)
+		if be.Pos != (Position{"extra", c.line, 1}) || be.OID != "1.9" || be.Kind != UnknownReference {
+			t.Errorf("%s: %+v, want extra:%d", c.name, be, c.line)
+		}
+		if !strings.HasPrefix(be.Error(), be.Pos.String()+": schema: ") {
+			t.Errorf("%s: %q", c.name, be.Error())
+		}
+	}
+}
+
+// FuzzBuildErrorPosition: whatever reads and does not build, the BuildError
+// points into the input -- a line that exists, and that starts a record (not
+// a continuation line, not a comment) -- and so does the first definition of
+// a duplicate.
+func FuzzBuildErrorPosition(f *testing.F) {
+	for _, s := range []string{
+		"attributetype ( 1.9\n SUP nope )\n",
+		"ldapsyntax ( 1.1 )\n\nldapsyntax ( 1.1\n DESC 'x' )\n",
+		"attributetype ( 1.1 NAME 'a' SYNTAX 1.1 )\nldapsyntax ( 1.1 )\nattributetype ( 1.2 NAME 'A' SUP a )\n",
+		"dn: x\nattributeTypes: ( 1.1 NAME 'a' SY\n NTAX 1.1 )\nldapSyntaxes: ( 1.1 )\nobjectClasses: ( 1.2 NAME 'c' MUST b )\n",
+		"objectclass ( 1.1 NAME 'x' SUP y )\nobjectclass ( 1.2 NAME 'y' SUP x )\n",
+		"ldapsyntax ( 1.1 )\nattributetype ( 1.2 NAME 'a' SYNTAX 1.1 \\\nCOLLECTIVE USAGE dSAOperation )\n",
+	} {
+		f.Add([]byte(s))
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_, err := Build(File{Name: "fuzz", Data: data})
+		var be *BuildError
+		if !errors.As(err, &be) {
+			return
+		}
+		ls := lines(data)
+		check := func(what string, p Position) {
+			if p.File != "fuzz" || p.Line < 1 || p.Line > len(ls) || p.Column != 1 {
+				t.Fatalf("%s position %+v is not in the input (%d lines): %v", what, p, len(ls), err)
+			}
+			if l := ls[p.Line-1]; l == "" || isBlank(l[0]) || l[0] == '#' {
+				t.Fatalf("%s position %+v is on %q, which starts no record: %v", what, p, l, err)
+			}
+		}
+		check("the refused definition's", be.Pos)
+		if be.RefPos.IsValid() {
+			check("the other definition's", be.RefPos)
+		}
+	})
+}

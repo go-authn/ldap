@@ -20,6 +20,33 @@ func decode(src ...string) (*schema.Definitions, error) {
 	return Decode(fs...)
 }
 
+// unplaced is d without the positions Decode gives each definition: what the
+// definitions SAY, for comparing two decodings of different text.
+func unplaced(d *schema.Definitions) *schema.Definitions {
+	out := &schema.Definitions{ObjectIdentifiers: d.ObjectIdentifiers}
+	for _, x := range d.Syntaxes {
+		c := *x
+		c.Pos = schema.Position{}
+		out.Syntaxes = append(out.Syntaxes, &c)
+	}
+	for _, x := range d.MatchingRules {
+		c := *x
+		c.Pos = schema.Position{}
+		out.MatchingRules = append(out.MatchingRules, &c)
+	}
+	for _, x := range d.AttributeTypes {
+		c := *x
+		c.Pos = schema.Position{}
+		out.AttributeTypes = append(out.AttributeTypes, &c)
+	}
+	for _, x := range d.ObjectClasses {
+		c := *x
+		c.Pos = schema.Position{}
+		out.ObjectClasses = append(out.ObjectClasses, &c)
+	}
+	return out
+}
+
 // example is the README's.
 const example = `
 object_identifier "supann" {
@@ -63,12 +90,15 @@ func TestDecodeTheExample(t *testing.T) {
 	}
 	want := &schema.Definitions{
 		ObjectIdentifiers: []schema.ObjectIdentifier{{Name: "supann", OID: "1.3.6.1.4.1.7135.1"}, {Name: "supannAttr", OID: "supann:2.1"}},
-		Syntaxes:          []*schema.Syntax{{OID: "1.3.6.1.4.1.1466.115.121.1.15", Desc: "Directory String"}},
-		MatchingRules:     []*schema.MatchingRule{{OID: "2.5.13.2", Names: []string{"caseIgnoreMatch"}, Syntax: "1.3.6.1.4.1.1466.115.121.1.15"}},
+		Syntaxes:          []*schema.Syntax{{OID: "1.3.6.1.4.1.1466.115.121.1.15", Desc: "Directory String", Pos: schema.Position{File: "a.hcl", Line: 10, Column: 1}}},
+		MatchingRules: []*schema.MatchingRule{{OID: "2.5.13.2", Names: []string{"caseIgnoreMatch"}, Syntax: "1.3.6.1.4.1.1466.115.121.1.15",
+			Pos: schema.Position{File: "a.hcl", Line: 14, Column: 1}}},
 		AttributeTypes: []*schema.AttributeType{{OID: "1.3.6.1.4.1.7135.1.2.1.14", Names: []string{"supannEtablissement"},
-			Desc: "code d etablissement", Equality: "caseIgnoreMatch", Syntax: "1.3.6.1.4.1.1466.115.121.1.15", SyntaxLen: "128"}},
+			Desc: "code d etablissement", Equality: "caseIgnoreMatch", Syntax: "1.3.6.1.4.1.1466.115.121.1.15", SyntaxLen: "128",
+			Pos: schema.Position{File: "a.hcl", Line: 19, Column: 1}}},
 		ObjectClasses: []*schema.ObjectClass{{OID: "1.3.6.1.4.1.7135.1.2.2.1", Names: []string{"supannPerson"}, Sup: []string{"top"},
-			Kind: schema.Auxiliary, May: []string{"supannEtablissement"}, Extensions: []schema.Extension{{Name: "X-ORIGIN", Values: []string{"SUPANN 2021"}}}}},
+			Kind: schema.Auxiliary, May: []string{"supannEtablissement"}, Extensions: []schema.Extension{{Name: "X-ORIGIN", Values: []string{"SUPANN 2021"}}},
+			Pos: schema.Position{File: "a.hcl", Line: 27, Column: 1}}},
 	}
 	if !reflect.DeepEqual(d, want) {
 		t.Fatalf("decoded %+v", d)
@@ -98,7 +128,7 @@ func TestDecodeTheExample(t *testing.T) {
 	}
 	for _, out := range [][]byte{plain, short} {
 		back, err := Decode(schema.File{Name: "x.hcl", Data: out})
-		if err != nil || !reflect.DeepEqual(back, d) {
+		if err != nil || !reflect.DeepEqual(unplaced(back), unplaced(d)) {
 			t.Errorf("round trip: %v\n%s", err, out)
 		}
 	}
@@ -129,7 +159,7 @@ func TestEncodeEscapesTemplates(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.AttributeTypes[0].Extensions[1].Values = nil
-	if !reflect.DeepEqual(back, d) {
+	if !reflect.DeepEqual(unplaced(back), d) {
 		t.Errorf("read back %+v\n%s", back.AttributeTypes[0], out)
 	}
 }
@@ -155,7 +185,7 @@ func TestEncodeEverything(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if !reflect.DeepEqual(back, d) {
+	if !reflect.DeepEqual(unplaced(back), d) {
 		t.Errorf("read back differently:\n%s", out)
 	}
 	if strings.Contains(string(out), "structural") || strings.Contains(string(out), "userApplications") || strings.Contains(string(out), "false") {
@@ -266,6 +296,44 @@ func TestDecodeRefuses(t *testing.T) {
 	}
 }
 
+// A definition decoded from HCL carries its block's position, column
+// included, so a schema.BuildError about it points at the block -- here an
+// indented one after another definition -- and so does the first definition
+// of a duplicate.
+func TestBuildErrorPointsAtTheBlock(t *testing.T) {
+	std, err := schema.Read(schema.StandardFiles()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := decode("# site\nattribute_type \"ok\" {\n  oid = \"1.9.1\"\n  sup = \"name\"\n}\n\n  attribute_type \"bad\" {\n    oid = \"1.9.2\"\n    sup = \"nope\"\n  }\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = schema.BuildFrom(std, d)
+	var be *schema.BuildError
+	if !errors.As(err, &be) || be.Kind != schema.UnknownReference || be.Field != "SUP" || be.Ref != "nope" ||
+		be.Pos != (schema.Position{File: "a.hcl", Line: 7, Column: 3}) ||
+		err.Error() != "a.hcl:7:3: schema: the attribute type bad has the supertype nope, which is not defined" {
+		t.Errorf("%#v: %v", be, err)
+	}
+	// Decode refuses a duplicate among the files it is given; two decodings
+	// are built together, as authnd builds its schema blocks.
+	one, err := decode(`attribute_type "x" {` + "\n" + `oid = "1.9.1"` + "\n" + `sup = "name"` + "\n}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := Decode(schema.File{Name: "b.hcl", Data: []byte(`object_class "y" { oid = "1.9.1" }` + "\n" + `attribute_type "x2" {` + "\n" + `oid = "1.9.1"` + "\n" + `sup = "name"` + "\n}\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = schema.BuildFrom(std, one, two)
+	if !errors.As(err, &be) || be.Kind != schema.DuplicateOID || be.Pos != (schema.Position{File: "b.hcl", Line: 2, Column: 1}) ||
+		be.RefPos != (schema.Position{File: "a.hcl", Line: 1, Column: 1}) || be.Ref != "x" ||
+		!strings.HasSuffix(err.Error(), "is defined twice (first defined at a.hcl:1:1)") {
+		t.Errorf("%#v: %v", be, err)
+	}
+}
+
 func TestErrorFormat(t *testing.T) {
 	e := &Error{hcl.Diagnostics{{Summary: "One"}, {Summary: "Two", Detail: "why", Subject: &hcl.Range{Filename: "f", Start: hcl.Pos{Line: 2, Column: 3}}}}}
 	if got := e.Error(); got != "One\nf:2:3: Two: why" {
@@ -292,7 +360,7 @@ func FuzzDecode(f *testing.F) {
 		if err != nil {
 			t.Fatalf("%v\n%s", err, out)
 		}
-		if !reflect.DeepEqual(d, back) {
+		if !reflect.DeepEqual(unplaced(d), unplaced(back)) {
 			t.Fatalf("decoded differently:\n%s", out)
 		}
 		again, _ := Encode(back, EncodeOptions{})

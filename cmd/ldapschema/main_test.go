@@ -110,7 +110,7 @@ func TestCheckReports(t *testing.T) {
 	}{
 		{"matchingrule ( 1.9 NAME 'mm' SYNTAX 1.9.9 )\nobjectclass ( 1.9.1 NAME 'oc' SUP nope MUST ( cn $ gone ) MAY gone )\n", 1,
 			"missing: syntax 1.9.9, used by mm\nmissing: object class nope, used by oc\nmissing: attribute type gone, used by oc\n"},
-		{"attributetype ( 1.9 NAME 'z' SUP cn USAGE dSAOperation )\n", 1, "build: schema: the attribute type z is dSAOperation and its supertype cn is userApplications"},
+		{"attributetype ( 1.9 NAME 'z' SUP cn USAGE dSAOperation )\n", 1, "x.schema:1:1: schema: the attribute type z is dSAOperation and its supertype cn is userApplications"},
 		{differing(t), 0,
 			"already in schema.Standard(), which is kept: 3 identical, 2 different (1 in DESC only)\n  differs: sn (Sup)\nbuild: ok, 0 definitions"},
 	} {

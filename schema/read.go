@@ -203,6 +203,10 @@ func (d *Definitions) readSchema(f File, m *OIDMacros) error {
 // add reads one definition of a kind, and positions an error in the file.
 func (d *Definitions) add(file, kind, spelled, text string, at spans, m *OIDMacros) error {
 	p := &parser{s: text, macros: m, openldap: true}
+	// at[0].line is the line the record starts on, before any continuation
+	// line was joined to it (slapd.conf(5); RFC 2849 note 2), whatever the
+	// form, and even for a base64 value; the record starts in column 1.
+	pos := Position{File: file, Line: at[0].line, Column: 1}
 	var err error
 	switch kind {
 	case "objectidentifier":
@@ -210,21 +214,25 @@ func (d *Definitions) add(file, kind, spelled, text string, at spans, m *OIDMacr
 	case "ldapsyntax":
 		var x *Syntax
 		if x, err = parseSyntax(p); err == nil {
+			x.Pos = pos
 			d.Syntaxes = append(d.Syntaxes, x)
 		}
 	case "matchingrule":
 		var x *MatchingRule
 		if x, err = parseMatchingRule(p); err == nil {
+			x.Pos = pos
 			d.MatchingRules = append(d.MatchingRules, x)
 		}
 	case "attributetype":
 		var x *AttributeType
 		if x, err = parseAttributeType(p); err == nil {
+			x.Pos = pos
 			d.AttributeTypes = append(d.AttributeTypes, x)
 		}
 	case "objectclass":
 		var x *ObjectClass
 		if x, err = parseObjectClass(p); err == nil {
+			x.Pos = pos
 			d.ObjectClasses = append(d.ObjectClasses, x)
 		}
 	default:
