@@ -3,7 +3,6 @@
 package schema
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 )
@@ -85,8 +84,8 @@ func BuildFrom(defs ...*Definitions) (*Schema, error) {
 		oidOf:       map[string]string{},
 	}
 	for _, x := range d.Syntaxes {
-		if s.syntaxByOID[x.OID] != nil {
-			return nil, fmt.Errorf("schema: the syntax %s is defined twice", x.OID)
+		if first := s.syntaxByOID[x.OID]; first != nil {
+			return nil, buildError(DuplicateOID, x, "", first.OID, first, "the syntax %s is defined twice", x.OID)
 		}
 		s.syntaxByOID[x.OID] = x
 		s.syntaxes = append(s.syntaxes, x)
@@ -111,7 +110,7 @@ func BuildFrom(defs ...*Definitions) (*Schema, error) {
 	}
 	for _, r := range s.rules {
 		if s.syntaxByOID[r.Syntax] == nil {
-			return nil, fmt.Errorf("schema: the matching rule %s has the syntax %s, which is not defined", r.Name(), r.Syntax)
+			return nil, buildError(UnknownReference, r, "SYNTAX", r.Syntax, nil, "the matching rule %s has the syntax %s, which is not defined", r.Name(), r.Syntax)
 		}
 	}
 	for _, t := range s.types {
@@ -130,20 +129,27 @@ func BuildFrom(defs ...*Definitions) (*Schema, error) {
 
 // index files an element under its OID and each of its names, refusing an
 // OID defined twice and remembering a name two OIDs claim.
-func index[T any](s *Schema, by map[string]T, x T, oid string, names []string, what string) error {
-	if _, dup := by[oid]; dup {
-		return fmt.Errorf("schema: the %s %s is defined twice", what, oid)
+func index[T interface {
+	definition
+	Name() string
+}](s *Schema, by map[string]T, x T, oid string, names []string, what string) error {
+	if first, dup := by[oid]; dup {
+		return buildError(DuplicateOID, x, "", first.Name(), first, "the %s %s is defined twice", what, oid)
 	}
 	by[oid] = x
 	for _, n := range names {
 		k := strings.ToLower(n)
-		if _, dup := by[k]; dup {
+		if first, dup := by[k]; dup {
 			// RFC 4512 1.4: "Implementations SHOULD treat short names
 			// (descriptors) used in an ambiguous manner ... as
 			// unrecognized." Refused here rather than resolved one way or
 			// the other, because which one wins would depend on the order
 			// the files were given in.
-			return fmt.Errorf("schema: the name %q is given to two %ss", n, what)
+			plural := what + "s"
+			if strings.HasSuffix(what, "s") {
+				plural = what + "es" // "object classes", not "object classs"
+			}
+			return buildError(DuplicateName, x, "NAME", n, first, "the name %q is given to two %s", n, plural)
 		}
 		by[k] = x
 		if o, seen := s.oidOf[k]; seen && o != oid {
@@ -157,7 +163,7 @@ func index[T any](s *Schema, by map[string]T, x T, oid string, names []string, w
 
 func (s *Schema) linkType(t *AttributeType, seen []*AttributeType) error {
 	if slices.Contains(seen, t) {
-		return fmt.Errorf("schema: the attribute type %s is its own supertype", t.Name())
+		return buildError(SuperiorCycle, t, "SUP", "", nil, "the attribute type %s is its own supertype", t.Name())
 	}
 	if t.linked {
 		return nil
@@ -169,7 +175,7 @@ func (s *Schema) linkType(t *AttributeType, seen []*AttributeType) error {
 		}
 		r := s.ruleBy[strings.ToLower(name)]
 		if r == nil {
-			return nil, fmt.Errorf("schema: the attribute type %s has the %s rule %s, which is not defined", t.Name(), what, name)
+			return nil, buildError(UnknownReference, t, what, name, nil, "the attribute type %s has the %s rule %s, which is not defined", t.Name(), what, name)
 		}
 		return r, nil
 	}
@@ -184,13 +190,13 @@ func (s *Schema) linkType(t *AttributeType, seen []*AttributeType) error {
 		return err
 	}
 	if t.Syntax != "" && s.syntaxByOID[t.Syntax] == nil {
-		return fmt.Errorf("schema: the attribute type %s has the syntax %s, which is not defined", t.Name(), t.Syntax)
+		return buildError(UnknownReference, t, "SYNTAX", t.Syntax, nil, "the attribute type %s has the syntax %s, which is not defined", t.Name(), t.Syntax)
 	}
 	t.syntax = t.Syntax
 	if t.Sup != "" {
 		sup := s.typeBy[strings.ToLower(t.Sup)]
 		if sup == nil {
-			return fmt.Errorf("schema: the attribute type %s has the supertype %s, which is not defined", t.Name(), t.Sup)
+			return buildError(UnknownReference, t, "SUP", t.Sup, nil, "the attribute type %s has the supertype %s, which is not defined", t.Name(), t.Sup)
 		}
 		if err := s.linkType(sup, append(seen, t)); err != nil {
 			return err
@@ -215,19 +221,19 @@ func (s *Schema) linkType(t *AttributeType, seen []*AttributeType) error {
 		// RFC 4512 2.5.1: "a subtype must have the same usage as its direct
 		// supertype" and "must be collective if its supertype is".
 		if t.Usage != sup.Usage {
-			return fmt.Errorf("schema: the attribute type %s is %s and its supertype %s is %s (RFC 4512 2.5.1)", t.Name(), t.Usage, sup.Name(), sup.Usage)
+			return buildError(UsageMismatch, t, "SUP", sup.Name(), sup, "the attribute type %s is %s and its supertype %s is %s (RFC 4512 2.5.1)", t.Name(), t.Usage, sup.Name(), sup.Usage)
 		}
 		if sup.Collective && !t.Collective {
-			return fmt.Errorf("schema: the attribute type %s must be COLLECTIVE like its supertype %s (RFC 4512 2.5.1)", t.Name(), sup.Name())
+			return buildError(CollectiveMismatch, t, "SUP", sup.Name(), sup, "the attribute type %s must be COLLECTIVE like its supertype %s (RFC 4512 2.5.1)", t.Name(), sup.Name())
 		}
 	}
 	// RFC 4512 4.1.2: "COLLECTIVE requires usage userApplications" and
 	// "NO-USER-MODIFICATION requires an operational usage."
 	if t.Collective && t.Usage != UserApplications {
-		return fmt.Errorf("schema: the attribute type %s is COLLECTIVE and %s (RFC 4512 4.1.2)", t.Name(), t.Usage)
+		return buildError(UsageViolation, t, "COLLECTIVE", "", nil, "the attribute type %s is COLLECTIVE and %s (RFC 4512 4.1.2)", t.Name(), t.Usage)
 	}
 	if t.NoUserModification && t.Usage == UserApplications {
-		return fmt.Errorf("schema: the attribute type %s is NO-USER-MODIFICATION and a user attribute (RFC 4512 4.1.2)", t.Name())
+		return buildError(UsageViolation, t, "NO-USER-MODIFICATION", "", nil, "the attribute type %s is NO-USER-MODIFICATION and a user attribute (RFC 4512 4.1.2)", t.Name())
 	}
 	return nil
 }
@@ -237,7 +243,7 @@ func (s *Schema) linkClass(c *ObjectClass, seen []*ObjectClass) error {
 		return nil // already linked
 	}
 	if slices.Contains(seen, c) {
-		return fmt.Errorf("schema: the object class %s is its own superclass", c.Name())
+		return buildError(SuperiorCycle, c, "SUP", "", nil, "the object class %s is its own superclass", c.Name())
 	}
 	var must, may []*AttributeType
 	add := func(list *[]*AttributeType, t *AttributeType) {
@@ -248,7 +254,7 @@ func (s *Schema) linkClass(c *ObjectClass, seen []*ObjectClass) error {
 	for _, name := range c.Sup {
 		sup := s.classBy[strings.ToLower(name)]
 		if sup == nil {
-			return fmt.Errorf("schema: the object class %s has the superclass %s, which is not defined", c.Name(), name)
+			return buildError(UnknownReference, c, "SUP", name, nil, "the object class %s has the superclass %s, which is not defined", c.Name(), name)
 		}
 		if err := s.linkClass(sup, append(seen, c)); err != nil {
 			return err
@@ -256,11 +262,11 @@ func (s *Schema) linkClass(c *ObjectClass, seen []*ObjectClass) error {
 		// RFC 4512 2.4.1-2.4.3: what may derive from what.
 		switch {
 		case c.Kind == Abstract && sup.Kind != Abstract:
-			return fmt.Errorf("schema: the abstract class %s derives from the %s class %s (RFC 4512 2.4.1)", c.Name(), strings.ToLower(sup.Kind.String()), sup.Name())
+			return buildError(KindViolation, c, "SUP", sup.Name(), sup, "the abstract class %s derives from the %s class %s (RFC 4512 2.4.1)", c.Name(), strings.ToLower(sup.Kind.String()), sup.Name())
 		case c.Kind == Structural && sup.Kind == Auxiliary:
-			return fmt.Errorf("schema: the structural class %s derives from the auxiliary class %s (RFC 4512 2.4.2)", c.Name(), sup.Name())
+			return buildError(KindViolation, c, "SUP", sup.Name(), sup, "the structural class %s derives from the auxiliary class %s (RFC 4512 2.4.2)", c.Name(), sup.Name())
 		case c.Kind == Auxiliary && sup.Kind == Structural:
-			return fmt.Errorf("schema: the auxiliary class %s derives from the structural class %s (RFC 4512 2.4.3)", c.Name(), sup.Name())
+			return buildError(KindViolation, c, "SUP", sup.Name(), sup, "the auxiliary class %s derives from the structural class %s (RFC 4512 2.4.3)", c.Name(), sup.Name())
 		}
 		c.sup = append(c.sup, sup)
 		for _, t := range sup.must {
@@ -278,7 +284,7 @@ func (s *Schema) linkClass(c *ObjectClass, seen []*ObjectClass) error {
 		for _, name := range list.names {
 			t := s.typeBy[strings.ToLower(name)]
 			if t == nil {
-				return fmt.Errorf("schema: the object class %s has %s %s, which is not a defined attribute type", c.Name(), list.what, name)
+				return buildError(UnknownReference, c, list.what, name, nil, "the object class %s has %s %s, which is not a defined attribute type", c.Name(), list.what, name)
 			}
 			add(list.into, t)
 		}

@@ -572,7 +572,7 @@ func (d *decoder) block(b *hcl.Block) {
 		if !ok || !d.unique(b, b.Type, oid) {
 			return
 		}
-		x := &schema.Syntax{OID: oid, Desc: f.desc(), Extensions: f.extensions()}
+		x := &schema.Syntax{OID: oid, Desc: f.desc(), Extensions: f.extensions(), Pos: position(b)}
 		if len(d.diags) == n {
 			d.defs.Syntaxes = append(d.defs.Syntaxes, x)
 		}
@@ -581,7 +581,7 @@ func (d *decoder) block(b *hcl.Block) {
 		if !ok {
 			return
 		}
-		x := &schema.MatchingRule{OID: oid, Names: names, Desc: f.desc(), Obsolete: f.flag("obsolete"), Syntax: f.syntax(), Extensions: f.extensions()}
+		x := &schema.MatchingRule{OID: oid, Names: names, Desc: f.desc(), Obsolete: f.flag("obsolete"), Syntax: f.syntax(), Extensions: f.extensions(), Pos: position(b)}
 		if len(d.diags) == n && x.Syntax == "" {
 			d.errorf(b.DefRange, "Missing syntax", "a matching rule must name its syntax (RFC 4512 4.1.3)")
 		}
@@ -596,7 +596,7 @@ func (d *decoder) block(b *hcl.Block) {
 			return
 		}
 		x := &schema.ObjectClass{OID: oid, Names: names, Desc: f.desc(), Obsolete: f.flag("obsolete"),
-			Sup: f.oidList("sup"), Must: f.oidList("must"), May: f.oidList("may"), Extensions: f.extensions()}
+			Sup: f.oidList("sup"), Must: f.oidList("must"), May: f.oidList("may"), Extensions: f.extensions(), Pos: position(b)}
 		if k, given := f.str("kind"); given {
 			kind, known := kinds[k]
 			if !known {
@@ -610,6 +610,12 @@ func (d *decoder) block(b *hcl.Block) {
 	}
 }
 
+// position is where a block starts -- its type keyword -- which is where an
+// error schema.BuildFrom returns about its definition points.
+func position(b *hcl.Block) schema.Position {
+	return schema.Position{File: b.DefRange.Filename, Line: b.DefRange.Start.Line, Column: b.DefRange.Start.Column}
+}
+
 func (d *decoder) attributeType(f *fields, n int) {
 	b := f.block
 	oid, names, ok := f.identity(b.Type)
@@ -619,7 +625,7 @@ func (d *decoder) attributeType(f *fields, n int) {
 	x := &schema.AttributeType{OID: oid, Names: names, Desc: f.desc(), Obsolete: f.flag("obsolete"),
 		Sup: f.oidField("sup"), Equality: f.oidField("equality"), Ordering: f.oidField("ordering"), Substr: f.oidField("substr"),
 		Syntax: f.syntax(), SyntaxLen: f.syntaxLen(), SingleValue: f.flag("single_value"), Collective: f.flag("collective"),
-		NoUserModification: f.flag("no_user_modification"), Extensions: f.extensions()}
+		NoUserModification: f.flag("no_user_modification"), Extensions: f.extensions(), Pos: position(b)}
 	if u, given := f.str("usage"); given {
 		usage, known := usages[strings.ToLower(u)]
 		if !known {

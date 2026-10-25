@@ -158,6 +158,33 @@ was; nothing changes for a deployment that does not set it.
   usage, are enforced. Lookup is by any name or OID, without regard to case.
   EQUALITY, ORDERING, SUBSTR and SYNTAX are inherited through SUP; MUST and
   MAY through superclasses.
+- A definition that does not build is a **`*schema.BuildError`**, found
+  with `errors.As`; a program reports a refusal from its fields, never by
+  matching the message. It carries:
+  - `Kind`, one of every check Build makes: `UnknownReference`,
+    `DuplicateOID`, `DuplicateName`, `SuperiorCycle`, `KindViolation`
+    (RFC 4512 2.4.1-2.4.3), `UsageMismatch` and `CollectiveMismatch` (2.5.1),
+    `UsageViolation` (4.1.2);
+  - `Element` (syntax, matching rule, attribute type, object class), `OID`
+    and `Name` (the first NAME) of the refused definition, and its `Pos`;
+  - `Field`, the term at fault (`SUP`, `EQUALITY`, `SYNTAX`, `MUST`, `NAME`
+    ...), and `Ref`: the undefined name or OID, or the other definition --
+    for a duplicate the first one, for a kind or usage rule the superior --
+    with its `RefOID` and `RefPos`.
+
+  Build stops at the first refusal, so there is one BuildError. Its message
+  is the one Build has always given, after the position, and a duplicate
+  says where the first definition is:
+  `site.schema:12:1: schema: the attribute type 2.5.4.3 is defined twice (first defined at rfc4519.schema:42:1)`.
+- **Positions.** Every syntax, matching rule, attribute type and object class
+  `schema.Read` returns has a `Pos` (`schema.Position`: file, line, column):
+  the line its record **starts** on in the original file, column 1 -- the
+  `.schema` keyword line, or the LDIF `attributeTypes:` line, before any
+  continuation line, backslash join or RFC 2849 fold is joined to it, base64
+  values included. `hclschema.Decode` gives the block's own line and column.
+  A definition made in code or by the `Parse` functions has none. `Pos` is
+  not part of what a definition says: `String` and `Format` leave it out,
+  and two readings of different text compare equal once it is set aside.
 - `schema.Standard()`: the definitions of RFC 4512 (the directory's own),
   4517 (syntaxes, matching rules), 4519 (person, cn, ...), 4524 (COSINE:
   account, mail, ...), 4523 (userCertificate), 2798 (inetOrgPerson), 2307

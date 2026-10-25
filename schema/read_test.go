@@ -67,7 +67,7 @@ func TestReadSchemaFormAsSlapdDoes(t *testing.T) {
 	at := d.AttributeTypes[0]
 	want := &AttributeType{OID: "1.3.6.1.7", Names: []string{"x", "y"}, Desc: "d", Equality: "caseIgnoreMatch",
 		Syntax: "1.3.6.1.4.1.1466.115.121.1.15", SyntaxLen: "32", SingleValue: true}
-	if !reflect.DeepEqual(at, want) {
+	if want.Pos = (Position{"f", 8, 1}); !reflect.DeepEqual(at, want) {
 		t.Errorf("attribute type %+v, want %+v", at, want)
 	}
 	if c := d.ObjectClasses[0]; c.OID != "1.3.6.2" || c.Kind != Auxiliary || c.May[0] != "x" || c.Sup[0] != "top" {
@@ -213,7 +213,7 @@ func TestFormatReadsBackToTheSameDefinitions(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%v\n%s", err, out)
 			}
-			if !reflect.DeepEqual(d, back) {
+			if !reflect.DeepEqual(unplaced(d), unplaced(back)) {
 				t.Errorf("macros=%v: the formatted definitions read back differently:\n%s", macros, out)
 			}
 		}
@@ -283,7 +283,7 @@ func FuzzRead(f *testing.F) {
 		if err != nil {
 			t.Fatalf("%v\n%s", err, out)
 		}
-		if !reflect.DeepEqual(d, back) {
+		if !reflect.DeepEqual(unplaced(d), unplaced(back)) {
 			t.Fatalf("read back differently:\n%s", out)
 		}
 	})

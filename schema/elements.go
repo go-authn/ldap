@@ -77,6 +77,9 @@ type Syntax struct {
 	OID        string
 	Desc       string
 	Extensions []Extension
+	// Pos is where the definition was read from, if it was (see Position).
+	// It is not part of the definition: String and Format leave it out.
+	Pos Position
 }
 
 // A MatchingRule is a matching rule description (RFC 4512 4.1.3). Syntax is
@@ -89,6 +92,8 @@ type MatchingRule struct {
 	Obsolete   bool
 	Syntax     string
 	Extensions []Extension
+	// Pos is where the definition was read from, if it was.
+	Pos Position
 }
 
 // A MatchingRuleUse lists the attribute types a matching rule may be used
@@ -126,6 +131,8 @@ type AttributeType struct {
 	NoUserModification bool
 	Usage              Usage
 	Extensions         []Extension
+	// Pos is where the definition was read from, if it was.
+	Pos Position
 
 	// Resolved by Build.
 	sup                     *AttributeType
@@ -145,6 +152,8 @@ type ObjectClass struct {
 	Must       []string
 	May        []string
 	Extensions []Extension
+	// Pos is where the definition was read from, if it was.
+	Pos Position
 
 	// Resolved by Build.
 	sup       []*ObjectClass
