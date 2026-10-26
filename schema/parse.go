@@ -120,19 +120,27 @@ func (p *parser) found() string {
 // word reads up to the next space or parenthesis: a keyword, an oid, or a
 // number. What it read is checked by the caller.
 func (p *parser) word() string {
+	stop := &wordStops[0]
+	if p.openldap {
+		stop = &wordStops[1]
+	}
 	start := p.pos
-	for p.pos < len(p.s) {
-		switch p.s[p.pos] {
-		case '(', ')', '\'', '$', '{', '}':
-			return p.s[start:p.pos]
-		}
-		if p.isSpace(p.s[p.pos]) {
-			return p.s[start:p.pos]
-		}
+	for p.pos < len(p.s) && !stop[p.s[p.pos]] {
 		p.pos++
 	}
 	return p.s[start:p.pos]
 }
+
+// wordStops are the bytes that end a word: a parenthesis, a quote, a
+// dollar, a brace, or a space -- isSpace's, in RFC 4512 ([0]) and in an
+// OpenLDAP file ([1]). One table lookup per byte, not a switch and a call.
+var wordStops = func() (t [2][256]bool) {
+	for _, c := range "()'${} " {
+		t[0][c], t[1][c] = true, true
+	}
+	t[1]['\t'], t[1]['\n'] = true, true
+	return t
+}()
 
 func (p *parser) numericoid() (string, error) {
 	q := p.openQuote()
