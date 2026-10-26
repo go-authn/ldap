@@ -190,6 +190,10 @@ type DITContentRule struct {
 	class          *ObjectClass
 	aux            []*ObjectClass
 	must, may, not []*AttributeType
+	// auxSet and notSet are aux and not as sets, so that checking an entry
+	// costs one lookup per class and attribute, however long the lists.
+	auxSet map[*ObjectClass]bool
+	notSet map[*AttributeType]bool
 }
 
 // A NameForm is a name form description (RFC 4512 4.1.7.2): the attribute

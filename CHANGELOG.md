@@ -1,0 +1,55 @@
+# Changelog
+
+Releases follow [semantic versioning](https://semver.org). Releases before
+v0.11.0 are described on the repository's GitHub releases page.
+
+## v0.11.0
+
+The three kinds of definition RFC 4512 4.1.6 and 4.1.7 define, and this
+package refused until now, are read, built, enforced and published.
+
+### Added
+
+- `schema.DITContentRule`, `schema.NameForm`, `schema.DITStructureRule`, and
+  their parsers `ParseDITContentRule`, `ParseNameForm`,
+  `ParseDITStructureRule` (strict RFC 4512, fuzzed by `FuzzDefinition`) and
+  printers. `schema.MaxRuleID` bounds a rule ID to 2^31-1 on every platform.
+- `schema.Read` reads them from `.schema` files (`ditcontentrule`, and this
+  package's `nameform` and `ditstructurerule`: slapd has no directive for
+  those two) and from LDIF (`olcDitContentRules`, `dITContentRules`,
+  `nameForms`, `dITStructureRules`), terms in any order as libldap reads
+  them. `Format` writes them back. These attributes were refused before.
+- `Definitions.DITContentRules`, `NameForms`, `DITStructureRules`.
+- `Build` links them: every class, type, name form and superior rule must be
+  defined; a content rule is for a structural class and its AUX are
+  auxiliary; a name form names a structural class; rule IDs and names are
+  unique. New `BuildErrorKind`s `DuplicateMember` and `PrecludedRequired`,
+  new `Element`s `ElementDITContentRule`, `ElementNameForm`,
+  `ElementDITStructureRule`.
+- `Schema.DITContentRules`, `NameForms`, `DITStructureRules`,
+  `DITContentRule(name)`, `DITContentRuleOf(class)`, `NameForm(name)`,
+  `DITStructureRule(id)`.
+- `Validate` enforces the active DIT content rule of the entry's structural
+  class (AUX, MUST, MAY, NOT) and its active name forms. New
+  `ProblemKind`s `AuxiliaryNotAllowed`, `Precluded`, `NameFormViolation`,
+  `NoStructureRule`.
+- `ValidateWith(entry, ValidateOptions{StrictAuxiliary: true})`: no
+  auxiliary class without a content rule, as RFC 4512 2.4.3 says.
+- `Schema.GoverningStructureRule(entry, superior)`: the DIT structure rule
+  governing an entry under a superior, or at the root of the subtree.
+- Syntaxes 1.3.6.1.4.1.1466.115.121.1.16, .17 and .35 are checked.
+- `cn=Subschema` publishes `dITContentRules`, `nameForms` and
+  `dITStructureRules` when the schema has any.
+- `hclschema`: blocks `dit_content_rule`, `name_form`, `dit_structure_rule`.
+- `ldapschema` converts and checks them, and reports every missing
+  reference they make.
+- `bench/libldap` compares the three parsers with libldap's.
+
+### Fixed
+
+- `hclschema.Decode` accepted a string that is not UTF-8, which then
+  encoded to another string (found by `FuzzDecode`). It is refused.
+
+### Behaviour
+
+- `Validate` gives the same result as before for a schema with no rules.

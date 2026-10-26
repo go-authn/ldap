@@ -33,7 +33,7 @@ func strip(x any) any {
 		return &c
 	case *DITContentRule:
 		c := *v
-		c.class, c.aux, c.must, c.may, c.not = nil, nil, nil, nil, nil
+		c.class, c.aux, c.must, c.may, c.not, c.auxSet, c.notSet = nil, nil, nil, nil, nil, nil, nil
 		c.Pos = Position{}
 		return &c
 	case *NameForm:

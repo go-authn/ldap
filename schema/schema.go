@@ -96,7 +96,7 @@ func BuildFrom(defs ...*Definitions) (*Schema, error) {
 		}
 		for _, e := range x.DITContentRules {
 			c := *e
-			c.class, c.aux, c.must, c.may, c.not = nil, nil, nil, nil, nil
+			c.class, c.aux, c.must, c.may, c.not, c.auxSet, c.notSet = nil, nil, nil, nil, nil, nil, nil
 			d.DITContentRules = append(d.DITContentRules, &c)
 		}
 		for _, e := range x.NameForms {
@@ -259,6 +259,7 @@ func (s *Schema) linkContentRule(r *DITContentRule) error {
 	r.class = c
 	r.aux = make([]*ObjectClass, 0, len(r.Aux))
 	seen := map[*ObjectClass]bool{}
+	r.auxSet = seen
 	for _, name := range r.Aux {
 		a := s.classBy[strings.ToLower(name)]
 		switch {
@@ -284,6 +285,10 @@ func (s *Schema) linkContentRule(r *DITContentRule) error {
 	}
 	if r.not, err = s.ruleTypes(r, "DIT content rule", "NOT", r.Not, members); err != nil {
 		return err
+	}
+	r.notSet = make(map[*AttributeType]bool, len(r.not))
+	for _, t := range r.not {
+		r.notSet[t] = true
 	}
 	// RFC 4512 4.1.6, and X.501 13.8.1: "Mandatory attributes associated
 	// with the structural or indicated auxiliary object classes shall not

@@ -295,7 +295,7 @@ func (v *validation) content() {
 			v.add(AuxiliaryNotAllowed, "objectClass", c.Name(), "the auxiliary class %s is allowed by no DIT content rule (RFC 4512 2.4.3)", c.Name())
 		case v.rule == nil:
 			v.add(AuxiliaryNotAllowed, "objectClass", c.Name(), "the auxiliary class %s is allowed by no DIT content rule: %s has none (RFC 4512 2.4.3)", c.Name(), v.structural.Name())
-		case !slices.Contains(v.rule.aux, c):
+		case !v.rule.auxSet[c]:
 			v.add(AuxiliaryNotAllowed, "objectClass", c.Name(), "the auxiliary class %s is not in the AUX of the DIT content rule %s (RFC 4512 4.1.6)", c.Name(), v.rule.Name())
 		}
 	}
@@ -318,11 +318,11 @@ func (v *validation) attributes(e Entry) {
 	// RFC 4512 4.1.6: "An entry may contain any non-precluded attributes
 	// allowed by the object classes the entry belongs to as well as all
 	// attributes allowed by the governing content rule."
-	var precluded []*AttributeType
+	var precluded map[*AttributeType]bool
 	if v.rule != nil {
 		allowed = append(allowed, v.rule.must...)
 		allowed = append(allowed, v.rule.may...)
-		precluded = v.rule.not
+		precluded = v.rule.notSet
 	}
 	seen := map[description]bool{}
 	present := map[*AttributeType]bool{}
@@ -352,7 +352,7 @@ func (v *validation) attributes(e Entry) {
 		}
 		// Precluded even in an extensibleObject: slapd checks NOT before it
 		// looks at the classes (servers/slapd/schema_check.c).
-		if slices.Contains(precluded, d.t) {
+		if precluded[d.t] {
 			v.add(Precluded, a.Description, v.rule.Name(), "%s is precluded by the DIT content rule %s (RFC 4512 4.1.6)", name, v.rule.Name())
 		}
 		for i, val := range a.Values {
