@@ -182,6 +182,10 @@ func TestTheParserRefusesMalformedInputWithAPosition(t *testing.T) {
 		{"( 1.2 DESC 'abc", at, 15, "not closed"},
 		{`( 1.2 DESC 'a\41' SUP x )`, at, 13, `\27 or \5C`},
 		{"( 1.2 DESC 'a\xff' SUP x )", at, 13, "not UTF-8"},
+		// The same two after an escape, where the string is rebuilt.
+		{`( 1.2 DESC 'a\27bc`, at, 18, "not closed"},
+		{"( 1.2 DESC '\\27\xff' SUP x )", at, 15, "not UTF-8"},
+		{`( 1.2 DESC 'a\27b\41' SUP x )`, at, 17, `\27 or \5C`},
 		{"( 1.2 X-A ('a''b') SUP x )", at, 14, "space between two strings"},
 		{"( 1.2 X-A )", at, 10, `expected '\''`},
 		{"( 1.2 X-A ( 'a' '' ) )", at, 17, "may not be empty"},
