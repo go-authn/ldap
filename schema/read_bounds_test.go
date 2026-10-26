@@ -4,9 +4,50 @@ package schema
 
 import (
 	"bytes"
+	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 )
+
+// A name longer than a .schema line may be reads from LDIF, which has no
+// such bound; Format folds it with backslashes, and it reads back the same
+// (FuzzRead found it: testdata/fuzz/FuzzRead/4c7aab3bc2a52768). The DESC is
+// placed so that a fold would fall just after the backslash of \5C, which
+// a piece may not end with.
+func TestFormatFoldsALineLongerThanSlapdAllows(t *testing.T) {
+	name := strings.Repeat("v", 3*MaxLineLength)
+	// "\tDESC '" then the d's put the backslash at byte 1998 of the line,
+	// the last of a 1999-byte piece.
+	desc := strings.Repeat("d", MaxLineLength-len("\tDESC '")-2) + `\5Cx`
+	ldif := "dn: cn=x\nattributeTypes: ( 1.1 NAME '" + name + "' DESC '" + desc + "' SUP c )\n"
+	d, err := Read(File{Name: "long.ldif", Data: []byte(ldif)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := d.Format(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, l := range strings.Split(string(out), "\n") {
+		if len(l) > MaxLineLength {
+			t.Fatalf("line %d is %d bytes", i+1, len(l))
+		}
+		if strings.HasSuffix(l, `\\`) {
+			t.Fatalf("line %d ends with two backslashes, which do not join: %q", i+1, l[len(l)-8:])
+		}
+	}
+	back, err := Read(File{Name: "formatted", Data: out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(unplaced(d), unplaced(back)) {
+		t.Fatal("read back differently")
+	}
+	if got := back.AttributeTypes[0].Desc; got != strings.Repeat("d", len(desc)-4)+`\x` {
+		t.Fatalf("DESC read back as %q", got[len(got)-8:])
+	}
+}
 
 // A definition folded on many continuation lines is joined in linear time.
 // Joining by repeated string concatenation copied the definition so far at
