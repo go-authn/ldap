@@ -318,7 +318,52 @@ for slapd:
     `f:3:18: ... the OID macro "zz" is not defined before it is used`.
 - **Bounds.** A file is at most 4 MiB (`schema.MaxFileSize`). A physical
   line in a `.schema` file is at most 2,000 bytes, as slapd.conf(5) says.
-  `FuzzRead` and `FuzzMacros` fuzz the reader and the expander.
+  `FuzzRead` and `FuzzMacros` fuzz the reader and the expander. The lines
+  of a definition are joined in linear time: a 4 MiB file of short
+  continuation lines took three minutes to read up to v0.10.0.
+
+### Performance
+
+The reference is OpenLDAP's own parser, libldap's `ldap_str2attributetype` and
+`ldap_str2objectclass` (`libraries/libldap/schema.c`). Both parsers are given
+the 41 attribute types and 13 object classes of OpenLDAP's `cosine.schema`,
+printed in RFC 4512 form, on one core:
+
+| one pass over the 54 definitions | time | allocations |
+| --- | --- | --- |
+| go-authn/ldap up to v0.10.0 | 84.0 µs ± 14% | 498, 49.1 KiB |
+| go-authn/ldap now | 32.5 µs ± 19% | 147, 20.6 KiB |
+| libldap (macOS system library) | 46.5 µs ± 7% | (malloc, not counted) |
+
+⚠ The times were measured on an Apple M4 Max with a 1-minute load of 13 to
+14, with `-cpu 1`, interleaving 6 runs of each binary. That is above the
+load at which a ratio can be trusted, so treat them as provisional until a
+measurement on a quiet machine is published. The allocation counts do not
+depend on load.
+
+The parser scans each definition once. A value is a slice of the input, not a
+copy, unless a quoted string holds an escape. Lists are gathered on the stack
+and copied out once. The terms a definition allows are a table built once per
+kind of definition. What is left to allocate is the result: a definition and
+its lists.
+
+- `go test -bench ParseCosine -benchmem ./schema` times the parser alone, in
+  pure Go. `BenchmarkReadCosine` times `schema.Read` on the whole file.
+- `bench/libldap` is the comparison with libldap. It is a module of its own, so
+  that this module stays free of cgo: `go build ./...`, `go vet ./...` and
+  `go test ./...` here never see it. It needs cgo, a C compiler and libldap's
+  headers (`ldap_schema.h`: present on macOS; `libldap-dev` on Debian and
+  Ubuntu). `-count` repeats each sub-benchmark back to back, so to interleave
+  the two, build the binary once and run it several times:
+
+  ```sh
+  cd bench/libldap
+  CGO_ENABLED=1 go test -c -o /tmp/libldap.test .
+  /tmp/libldap.test -test.run TestBothAccept -test.bench . -test.benchmem -test.cpu 1 -test.count 1
+  ```
+
+  `TestBothAccept` checks that both parsers accept every definition, so the
+  timing compares like with like.
 
 ### Schemas in HCL: package `schema/hclschema`
 
