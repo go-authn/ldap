@@ -19,6 +19,8 @@ var syntaxCheck = map[string]func(*Schema, []byte) bool{
 	"1.3.6.1.4.1.1466.115.121.1.11": func(_ *Schema, v []byte) bool { return len(v) == 2 && printable(v) },
 	"1.3.6.1.4.1.1466.115.121.1.12": func(_ *Schema, v []byte) bool { _, err := parseDN(string(v)); return err == nil },
 	"1.3.6.1.4.1.1466.115.121.1.15": func(_ *Schema, v []byte) bool { return len(v) > 0 && utf8.Valid(v) },
+	"1.3.6.1.4.1.1466.115.121.1.16": func(_ *Schema, v []byte) bool { _, err := ParseDITContentRule(string(v)); return err == nil },
+	"1.3.6.1.4.1.1466.115.121.1.17": func(_ *Schema, v []byte) bool { _, err := ParseDITStructureRule(string(v)); return err == nil },
 	"1.3.6.1.4.1.1466.115.121.1.24": func(s *Schema, v []byte) bool { _, ok := timeKey(s, v, whole); return ok },
 	"1.3.6.1.4.1.1466.115.121.1.26": func(_ *Schema, v []byte) bool { return ia5(v) },
 	"1.3.6.1.4.1.1466.115.121.1.27": func(_ *Schema, v []byte) bool { _, ok := parseInteger(string(v)); return ok },
@@ -34,6 +36,7 @@ var syntaxCheck = map[string]func(*Schema, []byte) bool{
 		_, err := parseDN(string(dn))
 		return err == nil
 	},
+	"1.3.6.1.4.1.1466.115.121.1.35": func(_ *Schema, v []byte) bool { _, err := ParseNameForm(string(v)); return err == nil },
 	"1.3.6.1.4.1.1466.115.121.1.36": func(_ *Schema, v []byte) bool {
 		return len(v) > 0 && strings.Trim(string(v), "0123456789 ") == ""
 	},

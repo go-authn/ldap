@@ -150,10 +150,19 @@ func TestReadLDIF(t *testing.T) {
 		"objectClasses: ( 1.5 NAME 'c' MAY a )",
 		"olcObjectIdentifier: {0}base 1.6",
 		"olcObjectClasses:{1}( base:1 NAME 'd' )",
+		"olcDitContentRules: {0}( base:1 NAME 'd' MUST a )",
+		"dITContentRules: ( 1.5 NAME 'c' NOT a )",
+		"nameForms: ( 1.7 NAME 'f' OC c MUST a )",
+		"dITStructureRules: ( 1 NAME 'r' FORM f SUP ( 1 2 ) )",
 		"",
 	}, "\r\n"))
 	if got := d.AttributeTypes[0].Desc; got != "café ${x}" {
 		t.Errorf("base64: DESC %q", got)
+	}
+	if len(d.DITContentRules) != 2 || d.DITContentRules[0].OID != "1.6.1" || d.DITContentRules[1].Not[0] != "a" ||
+		len(d.NameForms) != 1 || d.NameForms[0].OC != "c" ||
+		len(d.DITStructureRules) != 1 || !reflect.DeepEqual(d.DITStructureRules[0].Sup, []int{1, 2}) {
+		t.Errorf("the rules: %+v %+v %+v", d.DITContentRules, d.NameForms, d.DITStructureRules)
 	}
 	if len(d.Syntaxes) != 1 || len(d.MatchingRules) != 1 || len(d.AttributeTypes) != 2 || len(d.ObjectClasses) != 2 ||
 		d.AttributeTypes[1].Sup != "a" || d.ObjectClasses[1].OID != "1.6.1" {
@@ -171,7 +180,8 @@ func TestReadLDIF(t *testing.T) {
 		{"dn: x\nchangetype: delete", "f:2: changetype delete: only definitions that are added"},
 		{"dn: x\nchangetype: modify\ndelete: olcAttributeTypes", "f:3: delete: olcAttributeTypes: only definitions"},
 		{"dn: x\nchangetype: modify\nreplace: olcDitContentRules", "f:3: replace: olcDitContentRules"},
-		{"dn: x\nnameForms: ( 1.1 )", "f:2: nameForms is not supported"},
+		{"dn: x\nnameForms: ( 1.1 )", "f:2:19: schema: at offset 7: a name form must name its OC and its MUST"},
+		{"dn: x\nchangetype: modify\ndelete: nameForms", "f:3: delete: nameForms: only definitions"},
 		{"dn: x\nolcAttributeTypes: {0}( 1.1 NAME 'a' SYN\n TAX zz:1 )", `f:3:6: schema: at offset`},
 		{"dn: x\nolcObjectIdentifier: a", "f:2: objectidentifier takes a name and an OID"},
 		{"dn: x\nolcAttributeTypes: {x}( 1.1 SYNTAX 1.1 )", `f:2:20: schema: at offset 0: expected '('`},

@@ -30,8 +30,11 @@ const SubschemaDN = "cn=Subschema"
 // rule the root DSE follows, and RFC 4512 4.4: clients list "the names of
 // the desired schema attributes (as they are operational)".
 //
-// There are no dITStructureRules, nameForms or dITContentRules: none is
-// implemented, and publishing one would promise a rule nothing enforces.
+// dITContentRules, nameForms and dITStructureRules (RFC 4512 4.2.6-4.2.8)
+// are published when the schema has any, and only because each is
+// enforced: schema.Validate keeps the content rules and name forms, and
+// schema.GoverningStructureRule the structure rules. Publishing a rule that
+// nothing enforced would promise clients what the server does not keep.
 func subschemaEntry(s *schema.Schema) *Entry {
 	e := &Entry{DN: SubschemaDN}
 	e.Attributes = append(e.Attributes,
@@ -49,6 +52,9 @@ func subschemaEntry(s *schema.Schema) *Entry {
 	add("matchingRuleUse", strs(s.MatchingRuleUses()))
 	add("attributeTypes", strs(s.AttributeTypes()))
 	add("objectClasses", strs(s.ObjectClasses()))
+	add("dITContentRules", strs(s.DITContentRules()))
+	add("nameForms", strs(s.NameForms()))
+	add("dITStructureRules", strs(s.DITStructureRules()))
 	return e
 }
 

@@ -41,6 +41,10 @@ const (
 	InvalidValue                                // not of the type's syntax
 	BadDN                                       // the DN does not parse (RFC 4514)
 	RDNNotPresent                               // RFC 4512 2.3.1: the RDN's values are the entry's
+	AuxiliaryNotAllowed                         // RFC 4512 4.1.6: an auxiliary class the content rule does not list
+	Precluded                                   // RFC 4512 4.1.6: a type the content rule's NOT names
+	NameFormViolation                           // RFC 4512 4.1.7.2: an RDN no name form of the class allows
+	NoStructureRule                             // X.501 13.7.5: no structure rule allows the entry where it is
 )
 
 // A Problem is one way an entry breaks the schema. Attribute and Class name
@@ -123,21 +127,47 @@ func (s *Schema) describe(desc string) (description, bool) {
 // values are of their syntax; and the RDN's values are the entry's own
 // (2.3.1).
 //
+// When the entry's structural class has an active DIT content rule (4.1.6),
+// the entry belongs to no auxiliary class the rule does not list in AUX,
+// holds every type of its MUST, none of its NOT -- even an extensibleObject
+// -- and may hold its MAY. A rule for a superclass does not apply (4.1.6).
+// Types are the rule's own and not their subtypes (X.501 13.8.2, NOTE).
+//
+// When the class has active name forms (4.1.7.2), the RDN is made of the
+// types one of them allows: all its MUST, and nothing outside its MUST and
+// MAY. Where in the DIT the entry may be is not Validate's business: it
+// needs the entry's superior (see GoverningStructureRule).
+//
 // It returns nil or a *ValidationError naming every problem.
 //
-// ⛔ ONE deliberate departure. RFC 4512 2.4.3: "If no DIT content rule is
-// associated with the structural object class of the entry, the entry cannot
-// belong to any auxiliary object class." Nothing here implements DIT content
-// rules, so read literally that would refuse every posixAccount, every
-// shadowAccount and every ldapPublicKey -- all three are auxiliary. Every
-// directory server in use allows auxiliary classes when there are no DIT
-// content rules, and so does this. It is said here so that nobody believes
-// the RFC was followed to the letter.
-func (s *Schema) Validate(e Entry) error {
-	v := &validation{s: s}
+// ⛔ ONE deliberate departure, which ValidateOptions.StrictAuxiliary takes
+// back. RFC 4512 2.4.3: "If no DIT content rule is associated with the
+// structural object class of the entry, the entry cannot belong to any
+// auxiliary object class", and X.501 13.8.1 says the same. Read literally,
+// that refuses every posixAccount, every shadowAccount and every
+// ldapPublicKey -- all three are auxiliary -- in a schema with no content
+// rules. slapd allows auxiliary classes when there is no rule: its check
+// (servers/slapd/schema_check.c, SLAP_DISALLOW_AUX_WO_CR) is behind a flag
+// that no "disallow" verb of slapd.conf(5) sets. So does Validate.
+func (s *Schema) Validate(e Entry) error { return s.ValidateWith(e, ValidateOptions{}) }
+
+// ValidateOptions are the choices Validate makes where RFC 4512 and the
+// servers in use part.
+type ValidateOptions struct {
+	// StrictAuxiliary refuses an auxiliary class on an entry whose
+	// structural class has no active DIT content rule, as RFC 4512 2.4.3
+	// says.
+	StrictAuxiliary bool
+}
+
+// ValidateWith is Validate, with options.
+func (s *Schema) ValidateWith(e Entry, o ValidateOptions) error {
+	v := &validation{s: s, opt: o}
 	v.classes(e)
+	v.content()
 	v.attributes(e)
 	v.rdn(e)
+	v.naming()
 	if len(v.problems) == 0 {
 		return nil
 	}
@@ -146,8 +176,18 @@ func (s *Schema) Validate(e Entry) error {
 
 type validation struct {
 	s        *Schema
+	opt      ValidateOptions
 	problems []Problem
 	listed   []*ObjectClass
+	// structural is the entry's structural class, when it has exactly one
+	// structural chain (RFC 4512 2.4.2).
+	structural *ObjectClass
+	// rule is the active DIT content rule of that class, or nil.
+	rule *DITContentRule
+	// rdnTypes are the types of the RDN's AVAs that this schema defines;
+	// rdnRead is whether the RDN was read (a root DSE has none).
+	rdnTypes []*AttributeType
+	rdnRead  bool
 }
 
 func (v *validation) add(k ProblemKind, attr, class, format string, args ...any) {
@@ -209,6 +249,7 @@ func (v *validation) classes(e Entry) {
 	case 0:
 		v.add(NoStructuralClass, "objectClass", "", "it has no structural object class (RFC 4512 2.4.2)")
 	case 1:
+		v.structural = leaves[0]
 	default:
 		names := make([]string, len(leaves))
 		for i, l := range leaves {
@@ -229,6 +270,37 @@ func (v *validation) classes(e Entry) {
 	}
 }
 
+// content finds the active DIT content rule of the entry's structural class
+// and checks the auxiliary classes against it (RFC 4512 4.1.6: "An entry
+// may only belong to auxiliary object classes listed in the governing
+// content rule"). Every auxiliary class the entry belongs to is checked,
+// an auxiliary superclass of another as well, as slapd does
+// (servers/slapd/schema_check.c, entry_schema_check).
+func (v *validation) content() {
+	if v.structural != nil {
+		if r := v.s.contentRuleOf[v.structural]; r != nil && !r.Obsolete {
+			v.rule = r
+		}
+	}
+	if v.rule == nil && !v.opt.StrictAuxiliary {
+		return
+	}
+	for _, c := range v.listed {
+		if c.Kind != Auxiliary {
+			continue
+		}
+		switch {
+		case v.rule == nil && v.structural == nil:
+			// No structural class, already a problem: no rule to name.
+			v.add(AuxiliaryNotAllowed, "objectClass", c.Name(), "the auxiliary class %s is allowed by no DIT content rule (RFC 4512 2.4.3)", c.Name())
+		case v.rule == nil:
+			v.add(AuxiliaryNotAllowed, "objectClass", c.Name(), "the auxiliary class %s is allowed by no DIT content rule: %s has none (RFC 4512 2.4.3)", c.Name(), v.structural.Name())
+		case !slices.Contains(v.rule.aux, c):
+			v.add(AuxiliaryNotAllowed, "objectClass", c.Name(), "the auxiliary class %s is not in the AUX of the DIT content rule %s (RFC 4512 4.1.6)", c.Name(), v.rule.Name())
+		}
+	}
+}
+
 // attributes checks every attribute against its type and the classes.
 func (v *validation) attributes(e Entry) {
 	s := v.s
@@ -242,6 +314,15 @@ func (v *validation) attributes(e Entry) {
 		}
 		allowed = append(allowed, c.must...)
 		allowed = append(allowed, c.may...)
+	}
+	// RFC 4512 4.1.6: "An entry may contain any non-precluded attributes
+	// allowed by the object classes the entry belongs to as well as all
+	// attributes allowed by the governing content rule."
+	var precluded []*AttributeType
+	if v.rule != nil {
+		allowed = append(allowed, v.rule.must...)
+		allowed = append(allowed, v.rule.may...)
+		precluded = v.rule.not
 	}
 	seen := map[description]bool{}
 	present := map[*AttributeType]bool{}
@@ -268,6 +349,11 @@ func (v *validation) attributes(e Entry) {
 		// business (RFC 4512 3.4).
 		if !d.t.Usage.Operational() && !slices.Contains(allowed, d.t) && !extensible {
 			v.add(NotAllowed, a.Description, "", "%s is not allowed by any of the entry's object classes", name)
+		}
+		// Precluded even in an extensibleObject: slapd checks NOT before it
+		// looks at the classes (servers/slapd/schema_check.c).
+		if slices.Contains(precluded, d.t) {
+			v.add(Precluded, a.Description, v.rule.Name(), "%s is precluded by the DIT content rule %s (RFC 4512 4.1.6)", name, v.rule.Name())
 		}
 		for i, val := range a.Values {
 			if !s.ValidValue(d.t, val) {
@@ -297,6 +383,144 @@ func (v *validation) attributes(e Entry) {
 			v.add(MissingRequired, t.Name(), by[0], "%s is required by %s and is missing", t.Name(), strings.Join(by, ", "))
 		}
 	}
+	if v.rule != nil {
+		for _, t := range v.rule.must {
+			if !present[t] && !slices.Contains(must, t) {
+				v.add(MissingRequired, t.Name(), v.rule.Name(), "%s is required by the DIT content rule %s and is missing (RFC 4512 4.1.6)", t.Name(), v.rule.Name())
+			}
+		}
+	}
+}
+
+// naming checks the RDN against the active name forms of the entry's
+// structural class, when it has any: one of them must allow it (X.501
+// 13.7.2: "a name form shall be specified for each distinct set of
+// attributes to be used for naming").
+func (v *validation) naming() {
+	if v.structural == nil || !v.rdnRead {
+		return
+	}
+	var forms []*NameForm
+	for _, f := range v.s.nameFormsOf[v.structural] {
+		if !f.Obsolete {
+			forms = append(forms, f)
+		}
+	}
+	if len(forms) == 0 || slices.ContainsFunc(forms, v.names) {
+		return
+	}
+	v.add(NameFormViolation, "", v.structural.Name(), "the RDN (%s) is allowed by no name form of %s: %s", typeNames(v.rdnTypes), v.structural.Name(), formNeeds(forms))
+}
+
+// names reports whether the RDN is one the name form allows (RFC 4512
+// 4.1.7.2: "named using a value from each required attribute type and zero
+// or more values from the allowed attribute types").
+func (v *validation) names(f *NameForm) bool {
+	for _, t := range f.must {
+		if !slices.Contains(v.rdnTypes, t) {
+			return false
+		}
+	}
+	for _, t := range v.rdnTypes {
+		if !slices.Contains(f.must, t) && !slices.Contains(f.may, t) {
+			return false
+		}
+	}
+	return true
+}
+
+func typeNames(ts []*AttributeType) string {
+	names := make([]string, len(ts))
+	for i, t := range ts {
+		names[i] = t.Name()
+	}
+	return strings.Join(names, "+")
+}
+
+// formNeeds says what each form wants, for a message.
+func formNeeds(forms []*NameForm) string {
+	out := make([]string, len(forms))
+	for i, f := range forms {
+		out[i] = fmt.Sprintf("%s needs %s", f.Name(), typeNames(f.must))
+		if len(f.may) > 0 {
+			out[i] += fmt.Sprintf(" and allows %s", typeNames(f.may))
+		}
+	}
+	return strings.Join(out, "; ")
+}
+
+// GoverningStructureRule is the DIT structure rule that governs e when it
+// is placed under an entry governed by superior -- or, with superior nil,
+// when e is a subschema administrative point, the root of the subtree the
+// schema controls, such as a server's suffix (X.501 13.7.5).
+//
+// The rule is one whose name form is for e's structural class itself, not
+// a superclass of it (X.501 13.7.5: "It does not permit entries belonging
+// to any of the subclasses"), allows e's RDN, and either lists superior in
+// SUP or, for an administrative point, has no SUP. When several do, the
+// first defined governs. OBSOLETE rules and rules of an OBSOLETE name form
+// are not active and govern nothing.
+//
+// With no active structure rule in the schema there is nothing to govern
+// by, and the result is nil and no error: RFC 4512 7.1 makes structure
+// rules optional. Otherwise every entry has a governing rule (X.501 13.7.5:
+// "Each object and alias entry is governed by a single DIT structure
+// rule"), and an entry that has none is refused with a *ValidationError
+// whose problems are NoStructureRule or NameFormViolation, or the class or
+// DN problems that keep the rule from being found.
+//
+// A server checks a tree from its root down: the rule each entry gets is
+// the superior of its subordinates.
+//
+//	root, err := s.GoverningStructureRule(suffix, nil)
+//	people, err := s.GoverningStructureRule(ouPeople, root)
+//	_, err = s.GoverningStructureRule(alice, people)
+func (s *Schema) GoverningStructureRule(e Entry, superior *DITStructureRule) (*DITStructureRule, error) {
+	if s.activeStructureRules == 0 {
+		return nil, nil
+	}
+	v := &validation{s: s}
+	v.classes(e)
+	v.rdn(e)
+	if v.structural == nil || !v.rdnRead {
+		if !v.rdnRead && !slices.ContainsFunc(v.problems, func(p Problem) bool { return p.Kind == BadDN }) {
+			v.add(NoStructureRule, "", "", "the root DSE is governed by no DIT structure rule")
+		}
+		return nil, &ValidationError{DN: e.DN, Problems: v.problems}
+	}
+	var named, placed []*DITStructureRule
+	for _, r := range s.structureRulesOf[v.structural] {
+		if r.Obsolete || r.form.Obsolete {
+			continue
+		}
+		named = append(named, r)
+		if superior == nil && len(r.sup) == 0 || superior != nil && r.sup[superior.ID] {
+			placed = append(placed, r)
+		}
+	}
+	for _, r := range placed {
+		if v.names(r.form) {
+			return r, nil
+		}
+	}
+	where := "as a subschema administrative point"
+	if superior != nil {
+		where = "under an entry governed by the rule " + superior.Name()
+	}
+	v.problems = nil // the class and RDN problems are Validate's to report
+	switch {
+	case len(named) == 0:
+		v.add(NoStructureRule, "", v.structural.Name(), "no active DIT structure rule has a name form for %s (X.501 13.7.5)", v.structural.Name())
+	case len(placed) == 0:
+		v.add(NoStructureRule, "", v.structural.Name(), "no DIT structure rule allows %s %s (X.501 13.7.5)", v.structural.Name(), where)
+	default:
+		forms := make([]*NameForm, len(placed))
+		for i, r := range placed {
+			forms[i] = r.form
+		}
+		v.add(NameFormViolation, "", v.structural.Name(), "the RDN (%s) is allowed by the name form of no DIT structure rule that places %s %s: %s", typeNames(v.rdnTypes), v.structural.Name(), where, formNeeds(forms))
+	}
+	return nil, &ValidationError{DN: e.DN, Problems: v.problems}
 }
 
 // rdn checks that each AVA of the RDN is a value of the entry (RFC 4512
@@ -311,11 +535,15 @@ func (v *validation) rdn(e Entry) {
 	if len(rdns) == 0 {
 		return // the root DSE
 	}
+	v.rdnRead = true
 	for _, a := range rdns[0] {
 		t := v.s.AttributeType(a.typ)
 		if t == nil {
 			v.add(RDNNotPresent, a.typ, "", "the RDN names %s, which is not defined", a.typ)
 			continue
+		}
+		if !slices.Contains(v.rdnTypes, t) {
+			v.rdnTypes = append(v.rdnTypes, t)
 		}
 		found := false
 		for _, attr := range e.Attributes {

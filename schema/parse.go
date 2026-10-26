@@ -906,7 +906,11 @@ func (p *parser) ruleid() (string, error) {
 	w := p.word()
 	if !isNumber(w) {
 		p.pos = start
-		return "", p.fail("expected a rule ID, a number (RFC 4512 4.1.7.1), found %q", w)
+		found := strconv.Quote(w)
+		if w == "" {
+			found = p.found()
+		}
+		return "", p.fail("expected a rule ID, a number (RFC 4512 4.1.7.1), found %s", found)
 	}
 	if _, ok := ruleNumber(w); !ok {
 		p.pos = start
