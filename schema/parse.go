@@ -438,13 +438,45 @@ var (
 	objectClassTerms = newGrammar(tName, tDesc, tObsolete, tSup, tKind, tMust, tMay)
 )
 
-var termWords = map[string]term{
-	"NAME": tName, "DESC": tDesc, "OBSOLETE": tObsolete, "SUP": tSup,
-	"EQUALITY": tEquality, "ORDERING": tOrdering, "SUBSTR": tSubstr,
-	"SYNTAX": tSyntax, "SINGLE-VALUE": tSingleValue, "COLLECTIVE": tCollective,
-	"NO-USER-MODIFICATION": tNoUserMod, "USAGE": tUsage,
-	"ABSTRACT": tKind, "STRUCTURAL": tKind, "AUXILIARY": tKind,
-	"MUST": tMust, "MAY": tMay, "APPLIES": tApplies,
+// termWord is the term a keyword, in capitals, names. A switch, which the
+// compiler turns into comparisons by length and content, and no map: the
+// keyword is not hashed.
+func termWord(up string) (term, bool) {
+	switch up {
+	case "NAME":
+		return tName, true
+	case "DESC":
+		return tDesc, true
+	case "OBSOLETE":
+		return tObsolete, true
+	case "SUP":
+		return tSup, true
+	case "EQUALITY":
+		return tEquality, true
+	case "ORDERING":
+		return tOrdering, true
+	case "SUBSTR":
+		return tSubstr, true
+	case "SYNTAX":
+		return tSyntax, true
+	case "SINGLE-VALUE":
+		return tSingleValue, true
+	case "COLLECTIVE":
+		return tCollective, true
+	case "NO-USER-MODIFICATION":
+		return tNoUserMod, true
+	case "USAGE":
+		return tUsage, true
+	case "ABSTRACT", "STRUCTURAL", "AUXILIARY":
+		return tKind, true
+	case "MUST":
+		return tMust, true
+	case "MAY":
+		return tMay, true
+	case "APPLIES":
+		return tApplies, true
+	}
+	return 0, false
 }
 
 // definition reads LPAREN WSP numericoid, then each `SP term` in the order
@@ -490,7 +522,7 @@ func (p *parser) definition(allowed *grammar, read func(t term, keyword string) 
 			exts = append(exts, Extension{Name: kw, Values: vals})
 			continue
 		}
-		t, known := termWords[up]
+		t, known := termWord(up)
 		r := allowed[t]
 		if !known || r < 0 {
 			p.pos = start
@@ -690,7 +722,7 @@ func parseObjectClass(p *parser) (*ObjectClass, error) {
 				out.Sup, err = p.oids()
 			}
 		case tKind:
-			// kw is one of the three: termWords maps nothing else to tKind.
+			// kw is one of the three: termWord maps nothing else to tKind.
 			switch kw {
 			case "ABSTRACT":
 				out.Kind = Abstract
