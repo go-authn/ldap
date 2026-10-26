@@ -18,6 +18,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/go-authn/ldap/schema"
@@ -212,7 +213,16 @@ func merge(a, b *schema.Definitions) *schema.Definitions {
 		MatchingRules:     append(a.MatchingRules, b.MatchingRules...),
 		AttributeTypes:    append(a.AttributeTypes, b.AttributeTypes...),
 		ObjectClasses:     append(a.ObjectClasses, b.ObjectClasses...),
+		DITContentRules:   append(a.DITContentRules, b.DITContentRules...),
+		NameForms:         append(a.NameForms, b.NameForms...),
+		DITStructureRules: append(a.DITStructureRules, b.DITStructureRules...),
 	}
+}
+
+// rules is how many DIT content rules, name forms and DIT structure rules
+// d has.
+func rules(d *schema.Definitions) int {
+	return len(d.DITContentRules) + len(d.NameForms) + len(d.DITStructureRules)
 }
 
 // errCheck is a check that found something to refuse; what is printed it.
@@ -224,8 +234,13 @@ func check(w io.Writer, given *schema.Definitions) error {
 	std, _ := schema.Read(schema.StandardFiles()...) // embedded: a test proves it reads
 	fmt.Fprintf(w, "read: %d object identifiers, %d syntaxes, %d matching rules, %d attribute types, %d object classes\n",
 		len(given.ObjectIdentifiers), len(given.Syntaxes), len(given.MatchingRules), len(given.AttributeTypes), len(given.ObjectClasses))
+	if rules(given) > 0 {
+		fmt.Fprintf(w, "read: %d DIT content rules, %d name forms, %d DIT structure rules\n",
+			len(given.DITContentRules), len(given.NameForms), len(given.DITStructureRules))
+	}
 
-	rest := &schema.Definitions{}
+	// The standard schema has no rules: every one given is new.
+	rest := &schema.Definitions{DITContentRules: given.DITContentRules, NameForms: given.NameForms, DITStructureRules: given.DITStructureRules}
 	var same, differ []string
 	rest.Syntaxes = keepNew(std.Syntaxes, given.Syntaxes, func(x *schema.Syntax) string { return x.OID }, &same, &differ)
 	rest.MatchingRules = keepNew(std.MatchingRules, given.MatchingRules, func(x *schema.MatchingRule) string { return x.Name() }, &same, &differ)
@@ -262,7 +277,7 @@ func check(w io.Writer, given *schema.Definitions) error {
 		return errCheck
 	}
 	fmt.Fprintf(w, "build: ok, %d definitions added to schema.Standard()\n",
-		len(rest.Syntaxes)+len(rest.MatchingRules)+len(rest.AttributeTypes)+len(rest.ObjectClasses))
+		len(rest.Syntaxes)+len(rest.MatchingRules)+len(rest.AttributeTypes)+len(rest.ObjectClasses)+rules(rest))
 	return nil
 }
 
@@ -309,7 +324,8 @@ func fieldsThatDiffer(a, b any) []string {
 // defines, each with what refers to it -- all of them, where Build stops
 // at the first.
 func missingRefs(d *schema.Definitions) []string {
-	syntaxes, rules, types, classes := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
+	syntaxes, rules, types, classes, forms := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
+	structureRules := map[string]bool{}
 	for _, x := range d.Syntaxes {
 		syntaxes[x.OID] = true
 	}
@@ -327,6 +343,12 @@ func missingRefs(d *schema.Definitions) []string {
 	}
 	for _, x := range d.ObjectClasses {
 		index(classes, x.OID, x.Names)
+	}
+	for _, x := range d.NameForms {
+		index(forms, x.OID, x.Names)
+	}
+	for _, x := range d.DITStructureRules {
+		structureRules[strconv.Itoa(x.ID)] = true
 	}
 	refs := map[string][]string{}
 	var order []string
@@ -356,6 +378,27 @@ func missingRefs(d *schema.Definitions) []string {
 		}
 		for _, t := range slices.Concat(x.Must, x.May) {
 			need(types, "attribute type", t, x.Name())
+		}
+	}
+	for _, x := range d.DITContentRules {
+		need(classes, "object class", x.OID, x.Name())
+		for _, c := range x.Aux {
+			need(classes, "object class", c, x.Name())
+		}
+		for _, t := range slices.Concat(x.Must, x.May, x.Not) {
+			need(types, "attribute type", t, x.Name())
+		}
+	}
+	for _, x := range d.NameForms {
+		need(classes, "object class", x.OC, x.Name())
+		for _, t := range slices.Concat(x.Must, x.May) {
+			need(types, "attribute type", t, x.Name())
+		}
+	}
+	for _, x := range d.DITStructureRules {
+		need(forms, "name form", x.Form, x.Name())
+		for _, id := range x.Sup {
+			need(structureRules, "DIT structure rule", strconv.Itoa(id), x.Name())
 		}
 	}
 	out := make([]string, 0, len(order))

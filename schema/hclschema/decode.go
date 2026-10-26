@@ -40,14 +40,36 @@
 //	  extensions = { "X-ORIGIN" = ["SUPANN 2021"] }
 //	}
 //
-// One block per definition, its kind the block type. The label is the
+//	dit_content_rule "accountRule" {
+//	  oid  = "0.9.2342.19200300.100.4.5"
+//	  aux  = ["posixAccount", "shadowAccount"]
+//	  must = ["description"]
+//	  not  = ["seeAlso"]
+//	}
+//
+//	name_form "accountForm" {
+//	  oid  = "1.3.6.1.4.1.32473.1.2.3"
+//	  oc   = "account"
+//	  must = ["uid"]
+//	}
+//
+//	dit_structure_rule "people" {
+//	  id   = 3
+//	  form = "accountForm"
+//	  sup  = [2]
+//	}
+//
+// One block per definition, its kind the block type. A DIT content rule's
+// OID is its structural class's (RFC 4512 4.1.6). A DIT structure rule has
+// a rule ID, a number, where the others have an OID: "id", and "sup" lists
+// rule IDs (RFC 4512 4.1.7.1). The label is the
 // definition's first NAME, and "names" lists the others. A definition with
 // no NAME -- RFC 4512 4.1 makes NAME optional, and a syntax has none (RFC
 // 4517 3.1) -- is labelled with its OID instead, and then has no "oid".
 // Every term of RFC 4512 4.1 is an attribute named after it in lower case,
 // with underscores: desc, obsolete, sup, equality, ordering, substr,
 // syntax, single_value, collective, no_user_modification, usage, kind,
-// must, may. The "{len}" after a SYNTAX is not part of the OID (RFC 4512
+// must, may, aux, not, oc, form. The "{len}" after a SYNTAX is not part of the OID (RFC 4512
 // 4.1.2: noidlen), so it is a number of its own, syntax_len. The "X-"
 // terms are one map, extensions, from each name to its list of strings
 // (RFC 4512 4.1: xstring SP qdstrings), kept in the order written.
@@ -86,7 +108,10 @@ package hclschema
 import (
 	"errors"
 	"fmt"
+	"math/big"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/go-authn/ldap/schema"
 	"github.com/hashicorp/hcl/v2"
@@ -129,6 +154,9 @@ var topSchema = &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{
 	{Type: "matching_rule", LabelNames: []string{"name"}},
 	{Type: "attribute_type", LabelNames: []string{"name"}},
 	{Type: "object_class", LabelNames: []string{"name"}},
+	{Type: "dit_content_rule", LabelNames: []string{"name"}},
+	{Type: "name_form", LabelNames: []string{"name"}},
+	{Type: "dit_structure_rule", LabelNames: []string{"name"}},
 }}
 
 func attrs(names ...string) *hcl.BodySchema {
@@ -145,7 +173,10 @@ var kindSchemas = map[string]*hcl.BodySchema{
 	"matching_rule":     attrs("oid", "names", "desc", "obsolete", "syntax", "extensions"),
 	"attribute_type": attrs("oid", "names", "desc", "obsolete", "sup", "equality", "ordering", "substr",
 		"syntax", "syntax_len", "single_value", "collective", "no_user_modification", "usage", "extensions"),
-	"object_class": attrs("oid", "names", "desc", "obsolete", "sup", "kind", "must", "may", "extensions"),
+	"object_class":       attrs("oid", "names", "desc", "obsolete", "sup", "kind", "must", "may", "extensions"),
+	"dit_content_rule":   attrs("oid", "names", "desc", "obsolete", "aux", "must", "may", "not", "extensions"),
+	"name_form":          attrs("oid", "names", "desc", "obsolete", "oc", "must", "may", "extensions"),
+	"dit_structure_rule": attrs("id", "names", "desc", "obsolete", "form", "sup", "extensions"),
 }
 
 // decoder carries what Decode has read so far.
@@ -300,6 +331,10 @@ func (f *fields) str(name string) (string, bool) {
 		f.d.errorf(f.rangeOf(name), "Empty value", "%s may not be empty; leave it out instead", name)
 		return "", false
 	}
+	if !utf8.ValidString(v.AsString()) {
+		f.d.errorf(f.rangeOf(name), "Invalid UTF-8", "%s is not UTF-8 (RFC 4512 4.1: a qdstring is UTF-8)", name)
+		return "", false
+	}
 	return v.AsString(), true
 }
 
@@ -314,6 +349,10 @@ func (d *decoder) strings(v cty.Value, rng hcl.Range, name string) []string {
 		_, e := it.Element()
 		if e.IsNull() || e.Type() != cty.String || e.AsString() == "" {
 			d.errorf(rng, "Incorrect type", "%s must be a list of strings, none of them empty", name)
+			return nil
+		}
+		if !utf8.ValidString(e.AsString()) {
+			d.errorf(rng, "Invalid UTF-8", "%s holds a string that is not UTF-8 (RFC 4512 4.1: a qdstring is UTF-8)", name)
 			return nil
 		}
 		out = append(out, e.AsString())
@@ -607,7 +646,117 @@ func (d *decoder) block(b *hcl.Block) {
 		if len(d.diags) == n {
 			d.defs.ObjectClasses = append(d.defs.ObjectClasses, x)
 		}
+	case "dit_content_rule":
+		oid, names, ok := f.identity(b.Type)
+		if !ok {
+			return
+		}
+		x := &schema.DITContentRule{OID: oid, Names: names, Desc: f.desc(), Obsolete: f.flag("obsolete"),
+			Aux: f.oidList("aux"), Must: f.oidList("must"), May: f.oidList("may"), Not: f.oidList("not"), Extensions: f.extensions(), Pos: position(b)}
+		if len(d.diags) == n {
+			d.defs.DITContentRules = append(d.defs.DITContentRules, x)
+		}
+	case "name_form":
+		oid, names, ok := f.identity(b.Type)
+		if !ok {
+			return
+		}
+		x := &schema.NameForm{OID: oid, Names: names, Desc: f.desc(), Obsolete: f.flag("obsolete"),
+			OC: f.oidField("oc"), Must: f.oidList("must"), May: f.oidList("may"), Extensions: f.extensions(), Pos: position(b)}
+		if len(d.diags) == n && (x.OC == "" || x.Must == nil) {
+			d.errorf(b.DefRange, "Missing oc or must", "a name form names its structural class, oc, and the types of its RDN, must (RFC 4512 4.1.7.2)")
+		}
+		if len(d.diags) == n {
+			d.defs.NameForms = append(d.defs.NameForms, x)
+		}
+	case "dit_structure_rule":
+		d.structureRule(f, n)
 	}
+}
+
+// structureRule is a dit_structure_rule block: labelled with its first
+// name and then "id" is its rule ID, or labelled with its rule ID.
+func (d *decoder) structureRule(f *fields, n int) {
+	b := f.block
+	label, lrng := b.Labels[0], b.LabelRanges[0]
+	_, hasID := f.vals["id"]
+	extra := f.list("names")
+	var id int
+	var names []string
+	switch {
+	case isOIDLabel(label) && hasID:
+		d.errorf(f.rangeOf("id"), "Redundant id", "the label of this dit_structure_rule is its rule ID already")
+		return
+	case isOIDLabel(label) && extra != nil:
+		d.errorf(f.rangeOf("names"), "Names without a name", "a dit_structure_rule labelled with its rule ID has no names; label it with the first")
+		return
+	case isOIDLabel(label):
+		r, err := schema.ParseDITStructureRule("( " + label + " FORM x )")
+		if err != nil {
+			d.errorf(lrng, "Invalid rule ID", "%q is not a rule ID: a number from 0 to %d (RFC 4512 4.1.7.1)", label, schema.MaxRuleID)
+			return
+		}
+		id = r.ID
+	case !hasID:
+		d.errorf(b.DefRange, "Missing id", "a dit_structure_rule labelled with a name needs an id")
+		return
+	default:
+		var ok bool
+		if id, ok = f.ruleID(f.vals["id"], "id"); !ok {
+			return
+		}
+		names = append([]string{label}, extra...)
+	}
+	for i, nm := range names {
+		rng := lrng
+		if i > 0 {
+			rng = f.rangeOf("names")
+		}
+		if !probe(&schema.ObjectClass{OID: "1.1", Names: []string{nm}}) {
+			d.errorf(rng, "Invalid name", "%q is not a descriptor (RFC 4512 1.4: a letter, then letters, digits and hyphens)", nm)
+			return
+		}
+		if !d.unique(b, b.Type+" name", nm) {
+			return
+		}
+	}
+	if !d.unique(b, b.Type, strconv.Itoa(id)) {
+		return
+	}
+	x := &schema.DITStructureRule{ID: id, Names: names, Desc: f.desc(), Obsolete: f.flag("obsolete"), Form: f.oidField("form"),
+		Extensions: f.extensions(), Pos: position(b)}
+	if v, given := f.vals["sup"]; given {
+		if v.IsNull() || !v.Type().IsTupleType() || v.LengthInt() == 0 {
+			d.errorf(f.rangeOf("sup"), "Incorrect type", "sup must be a list of rule IDs")
+		} else {
+			for it := v.ElementIterator(); it.Next(); {
+				_, e := it.Element()
+				sup, ok := f.ruleID(e, "sup")
+				if !ok {
+					break
+				}
+				x.Sup = append(x.Sup, sup)
+			}
+		}
+	}
+	if len(d.diags) == n && x.Form == "" {
+		d.errorf(b.DefRange, "Missing form", "a DIT structure rule names its name form, form (RFC 4512 4.1.7.1)")
+	}
+	if len(d.diags) == n {
+		d.defs.DITStructureRules = append(d.defs.DITStructureRules, x)
+	}
+}
+
+// ruleID is a rule ID: a whole number from 0 to MaxRuleID.
+func (f *fields) ruleID(v cty.Value, name string) (int, bool) {
+	if !v.IsNull() && v.Type() == cty.Number {
+		if bf := v.AsBigFloat(); bf.IsInt() && bf.Sign() >= 0 && bf.Cmp(big.NewFloat(schema.MaxRuleID)) <= 0 {
+			i, _ := bf.Int64()
+			return int(i), true
+		}
+	}
+	f.d.errorf(f.rangeOf(name), "Invalid "+name, "%s must be a rule ID, a whole number from 0 to %d (RFC 4512 4.1.7.1)", name, schema.MaxRuleID)
+	return 0, false
 }
 
 // position is where a block starts -- its type keyword -- which is where an

@@ -20,7 +20,9 @@ const MaxFileSize = 4 << 20
 //
 //   - OpenLDAP's .schema form (slapd.conf(5)), which the embedded files use:
 //     a definition starts with its kind -- objectidentifier, ldapsyntax,
-//     matchingrule, attributetype or objectclass, in any case -- at the
+//     matchingrule, attributetype, objectclass or ditcontentrule, and this
+//     package's nameform and ditstructurerule, for which slapd has no
+//     directive, in any case -- at the
 //     start of a line, and continues on the lines that start with white
 //     space; '#' starts a comment line. The continuation lines are joined
 //     as slapd joins them: the newline goes, the first white space
@@ -31,9 +33,10 @@ const MaxFileSize = 4 << 20
 //   - LDIF (RFC 2849), when that first line is "name: value" -- "dn:",
 //     "version:", or an attribute: OpenLDAP's cn=config form
 //     (slapd-config(5): olcObjectIdentifier, olcLdapSyntaxes,
-//     olcAttributeTypes, olcObjectClasses, each value perhaps after a {N}
-//     ordering prefix), and the subschema subentry's own attributes (RFC
-//     4512 4.2: ldapSyntaxes, matchingRules, attributeTypes, objectClasses),
+//     olcAttributeTypes, olcObjectClasses, olcDitContentRules, each value
+//     perhaps after a {N} ordering prefix), and the subschema subentry's own
+//     attributes (RFC 4512 4.2: ldapSyntaxes, matchingRules, attributeTypes,
+//     objectClasses, dITContentRules, nameForms, dITStructureRules),
 //     which is the form a server publishes its definitions in.
 //
 // In both forms, and only there, the parser is as lenient as libldap is
@@ -79,6 +82,9 @@ type Definitions struct {
 	MatchingRules     []*MatchingRule
 	AttributeTypes    []*AttributeType
 	ObjectClasses     []*ObjectClass
+	DITContentRules   []*DITContentRule
+	NameForms         []*NameForm
+	DITStructureRules []*DITStructureRule
 }
 
 // Read reads files, in order, into Definitions. A macro defined in one
@@ -252,8 +258,26 @@ func (d *Definitions) add(file, kind, spelled, text string, at spans, m *OIDMacr
 			x.Pos = pos
 			d.ObjectClasses = append(d.ObjectClasses, x)
 		}
+	case "ditcontentrule":
+		var x *DITContentRule
+		if x, err = parseDITContentRule(p); err == nil {
+			x.Pos = pos
+			d.DITContentRules = append(d.DITContentRules, x)
+		}
+	case "nameform":
+		var x *NameForm
+		if x, err = parseNameForm(p); err == nil {
+			x.Pos = pos
+			d.NameForms = append(d.NameForms, x)
+		}
+	case "ditstructurerule":
+		var x *DITStructureRule
+		if x, err = parseDITStructureRule(p); err == nil {
+			x.Pos = pos
+			d.DITStructureRules = append(d.DITStructureRules, x)
+		}
 	default:
-		err = fmt.Errorf("%q is not a kind of definition (objectidentifier, ldapsyntax, matchingrule, attributetype, objectclass)", spelled)
+		err = fmt.Errorf("%q is not a kind of definition (objectidentifier, ldapsyntax, matchingrule, attributetype, objectclass, ditcontentrule, nameform, ditstructurerule)", spelled)
 	}
 	if err == nil {
 		return nil
@@ -316,15 +340,13 @@ var ldifKinds = map[string]string{
 	"matchingrules":     "matchingrule",
 	"olcattributetypes": "attributetype", "attributetypes": "attributetype",
 	"olcobjectclasses": "objectclass", "objectclasses": "objectclass",
+	// slapd-config(5) has olcDitContentRules and nothing for the other two:
+	// OpenLDAP implements no name forms or structure rules.
+	"olcditcontentrules": "ditcontentrule", "ditcontentrules": "ditcontentrule",
+	"nameforms": "nameform", "ditstructurerules": "ditstructurerule",
 	// RFC 4512 4.1.4: a server derives these from the rules and the
 	// types, and so does Build.
 	"matchingruleuse": "",
-}
-
-// unsupported are schema attributes this package has no model for.
-var unsupported = map[string]bool{
-	"olcditcontentrules": true, "ditcontentrules": true,
-	"nameforms": true, "ditstructurerules": true,
 }
 
 // readLDIF reads RFC 2849 LDIF: a line that starts with ONE space
@@ -404,13 +426,10 @@ func (d *Definitions) ldifLine(file, name, spelled, value string, start, line in
 		}
 		return nil
 	case "delete", "replace":
-		if _, ok := ldifKinds[strings.ToLower(value)]; ok || unsupported[strings.ToLower(value)] {
+		if _, ok := ldifKinds[strings.ToLower(value)]; ok {
 			return &FileError{file, line, 0, fmt.Errorf("%s: %s: only definitions that are added can be read", spelled, value)}
 		}
 		return nil
-	}
-	if unsupported[name] {
-		return &FileError{file, line, 0, fmt.Errorf("%s is not supported: this package has no DIT content rules, name forms or structure rules", spelled)}
 	}
 	kind, ok := ldifKinds[name]
 	if !ok || kind == "" {

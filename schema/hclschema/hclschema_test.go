@@ -12,6 +12,11 @@ import (
 	"github.com/hashicorp/hcl/v2"
 )
 
+// blk is a block of HCL, one attribute to a line.
+func blk(head string, lines ...string) string {
+	return head + " {\n" + strings.Join(lines, "\n") + "\n}"
+}
+
 func decode(src ...string) (*schema.Definitions, error) {
 	var fs []schema.File
 	for i, s := range src {
@@ -44,7 +49,110 @@ func unplaced(d *schema.Definitions) *schema.Definitions {
 		c.Pos = schema.Position{}
 		out.ObjectClasses = append(out.ObjectClasses, &c)
 	}
+	for _, x := range d.DITContentRules {
+		c := *x
+		c.Pos = schema.Position{}
+		out.DITContentRules = append(out.DITContentRules, &c)
+	}
+	for _, x := range d.NameForms {
+		c := *x
+		c.Pos = schema.Position{}
+		out.NameForms = append(out.NameForms, &c)
+	}
+	for _, x := range d.DITStructureRules {
+		c := *x
+		c.Pos = schema.Position{}
+		out.DITStructureRules = append(out.DITStructureRules, &c)
+	}
 	return out
+}
+
+// rules are authnd's tree in HCL: a DIT content rule, name forms and DIT
+// structure rules, on top of the standard schema.
+const rules = `
+dit_content_rule "accountRule" {
+  oid  = "0.9.2342.19200300.100.4.5"
+  aux  = ["posixAccount", "shadowAccount"]
+  must = ["description"]
+  not  = ["seeAlso"]
+}
+
+name_form "domainForm" {
+  oid  = "1.3.6.1.4.1.32473.1.2.1"
+  oc   = "domain"
+  must = ["dc"]
+}
+
+name_form "1.3.6.1.4.1.32473.1.2.2" {
+  oc   = "organizationalUnit"
+  must = ["ou"]
+}
+
+dit_structure_rule "suffix" {
+  id   = 1
+  form = "domainForm"
+}
+
+dit_structure_rule "2" {
+  form = "1.3.6.1.4.1.32473.1.2.2"
+  sup  = [1, 2]
+}
+`
+
+// The rules decode to what package schema reads, build on the standard
+// schema, govern the tree, and encode back to the same definitions; a
+// BuildError about one points at its block.
+func TestDecodeTheRules(t *testing.T) {
+	d, err := decode(rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &schema.Definitions{
+		DITContentRules: []*schema.DITContentRule{{OID: "0.9.2342.19200300.100.4.5", Names: []string{"accountRule"},
+			Aux: []string{"posixAccount", "shadowAccount"}, Must: []string{"description"}, Not: []string{"seeAlso"}}},
+		NameForms: []*schema.NameForm{{OID: "1.3.6.1.4.1.32473.1.2.1", Names: []string{"domainForm"}, OC: "domain", Must: []string{"dc"}},
+			{OID: "1.3.6.1.4.1.32473.1.2.2", OC: "organizationalUnit", Must: []string{"ou"}}},
+		DITStructureRules: []*schema.DITStructureRule{{ID: 1, Names: []string{"suffix"}, Form: "domainForm"},
+			{ID: 2, Form: "1.3.6.1.4.1.32473.1.2.2", Sup: []int{1, 2}}},
+	}
+	if !reflect.DeepEqual(unplaced(d), want) {
+		t.Fatalf("decoded %+v %+v %+v", d.DITContentRules, d.NameForms, d.DITStructureRules)
+	}
+	if d.DITStructureRules[1].Pos != (schema.Position{File: "a.hcl", Line: 25, Column: 1}) {
+		t.Errorf("position %v", d.DITStructureRules[1].Pos)
+	}
+	std, _ := schema.Read(schema.StandardFiles()...)
+	s, err := schema.BuildFrom(std, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suffix := schema.Entry{DN: "dc=example,dc=org", Attributes: []schema.Attribute{
+		{Description: "objectClass", Values: [][]byte{[]byte("top"), []byte("domain")}}, {Description: "dc", Values: [][]byte{[]byte("example")}}}}
+	if r, err := s.GoverningStructureRule(suffix, nil); err != nil || r.ID != 1 {
+		t.Errorf("the suffix: %v %v", r, err)
+	}
+	out, err := Encode(d, EncodeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{`dit_structure_rule "suffix" {` + "\n  id   = 1\n", `dit_structure_rule "2" {`, `sup  = [1, 2]`, `name_form "1.3.6.1.4.1.32473.1.2.2" {`} {
+		if !strings.Contains(string(out), s) {
+			t.Errorf("no %q in\n%s", s, out)
+		}
+	}
+	back, err := Decode(schema.File{Name: "x.hcl", Data: out})
+	if err != nil || !reflect.DeepEqual(unplaced(back), want) {
+		t.Errorf("round trip: %v\n%s", err, out)
+	}
+
+	bad, err := decode("\n\ndit_structure_rule \"x\" {\n  id   = 9\n  form = \"nope\"\n}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = schema.BuildFrom(std, bad)
+	if err == nil || err.Error() != "a.hcl:3:1: schema: the DIT structure rule x has FORM nope, which is not a defined name form" {
+		t.Errorf("%v", err)
+	}
 }
 
 // example is the README's.
@@ -176,6 +284,19 @@ func TestEncodeEverything(t *testing.T) {
 			{OID: "1.6", Names: []string{"c", "c2"}, Kind: schema.Abstract, Must: []string{"op"}, Obsolete: true},
 			{OID: "1.7", Kind: schema.Structural},
 		},
+		DITContentRules: []*schema.DITContentRule{
+			{OID: "1.7", Names: []string{"r", "r2"}, Desc: "d", Obsolete: true, Aux: []string{"a"}, Must: []string{"op"}, May: []string{"m", "n"},
+				Not: []string{"x"}, Extensions: []schema.Extension{{Name: "X-O", Values: []string{"y"}}}},
+		},
+		NameForms: []*schema.NameForm{
+			{OID: "1.8", Names: []string{"f"}, Desc: "d", Obsolete: true, OC: "c", Must: []string{"op"}, May: []string{"a", "b", "c", "d", "e"},
+				Extensions: []schema.Extension{{Name: "X-O", Values: []string{"y"}}}},
+		},
+		DITStructureRules: []*schema.DITStructureRule{
+			{ID: 0, Form: "f"},
+			{ID: schema.MaxRuleID, Names: []string{"s", "s2"}, Desc: "d", Obsolete: true, Form: "1.8", Sup: []int{0, schema.MaxRuleID},
+				Extensions: []schema.Extension{{Name: "X-O", Values: []string{"y"}}}},
+		},
 	}
 	out, err := Encode(d, EncodeOptions{})
 	if err != nil {
@@ -199,6 +320,9 @@ func TestEncodeEverything(t *testing.T) {
 		{MatchingRules: []*schema.MatchingRule{{OID: "1.1", Syntax: "1.1", Extensions: twice}}},
 		{AttributeTypes: []*schema.AttributeType{{OID: "1.1", Syntax: "1.1", Extensions: twice}}},
 		{ObjectClasses: []*schema.ObjectClass{{OID: "1.1", Extensions: twice}}},
+		{DITContentRules: []*schema.DITContentRule{{OID: "1.1", Extensions: twice}}},
+		{NameForms: []*schema.NameForm{{OID: "1.1", OC: "c", Must: []string{"a"}, Extensions: twice}}},
+		{DITStructureRules: []*schema.DITStructureRule{{ID: 1, Form: "f", Extensions: twice}}},
 		{AttributeTypes: []*schema.AttributeType{{OID: "1.1", Syntax: "1.1", SyntaxLen: "x"}}},
 	} {
 		if _, err := Encode(bad, EncodeOptions{}); err == nil {
@@ -265,6 +389,40 @@ func TestDecodeRefuses(t *testing.T) {
 		{`object_class "c" {}`, `Missing oid`, ``},
 		{`object_class "c" { oid = "1.1" }` + "\n" + `object_class "d" { oid = "1.1" }`, `object_class "1.1" is already defined`, ``},
 		{strings.Repeat("[", MaxNesting+1), `a.hcl:1:65: Nested too deeply`, strings.Repeat("\n", 3)},
+
+		// Found by FuzzDecode: a string that is not UTF-8 decoded, and
+		// encoded to another (cty.StringVal replaces what is not UTF-8).
+		{"ldap_syntax \"0.0\" { desc = \"$00005\xc1\x87\" }", `a.hcl:1:28: Invalid UTF-8: desc is not UTF-8`, `ldap_syntax "0.0" { desc = "$00005é" }`},
+		{blk(`object_class "c"`, `oid = "1.1"`, "extensions = { X-A = [\"\xc1\x87\"] }"), `Invalid UTF-8: X-A holds a string that is not UTF-8`, ``},
+
+		// The rules.
+		{`dit_content_rule "r" {}`, `Missing oid`, `dit_content_rule "r" { oid = "2.5.6.6" }`},
+		{blk(`dit_content_rule "r"`, `oid = "2.5.6.6"`, `aux = ["a b"]`), `a.hcl:3:7: Invalid aux`, blk(`dit_content_rule "r"`, `oid = "2.5.6.6"`, `aux = ["a"]`)},
+		{blk(`dit_content_rule "r"`, `oid = "2.5.6.6"`, `not = "a"`), `not must be a list of strings`, ``},
+		{blk(`dit_content_rule "r"`, `oid = "2.5.6.6"`, `oc = "a"`), `Unsupported argument`, ``},
+		{`dit_content_rule "2.5.6.6" {}` + "\n" + `dit_content_rule "2.5.6.6" {}`, `dit_content_rule "2.5.6.6" is already defined`, ``},
+		{blk(`name_form "f"`, `oid = "1.2"`, `oc = "c"`), `a.hcl:1:1: Missing oc or must`, blk(`name_form "f"`, `oid = "1.2"`, `oc = "c"`, `must = ["a"]`)},
+		{blk(`name_form "f"`, `oid = "1.2"`, `must = ["a"]`), `Missing oc or must`, ``},
+		{blk(`name_form "f"`, `oid = "1.2"`, `oc = "c d"`, `must = ["a"]`), `a.hcl:3:6: Invalid oc`, ``},
+		{`name_form "f" {}`, `Missing oid`, ``},
+		{`dit_structure_rule "r" { form = "f" }`, `a.hcl:1:1: Missing id`, blk(`dit_structure_rule "r"`, `id = 1`, `form = "f"`)},
+		{blk(`dit_structure_rule "r"`, `id = 1`), `a.hcl:1:1: Missing form`, ``},
+		{blk(`dit_structure_rule "1"`, `id = 1`, `form = "f"`), `a.hcl:2:6: Redundant id`, `dit_structure_rule "1" { form = "f" }`},
+		{blk(`dit_structure_rule "1"`, `names = ["r"]`, `form = "f"`), `Names without a name`, ``},
+		{`dit_structure_rule "01" { form = "f" }`, `a.hcl:1:20: Invalid rule ID: "01" is not a rule ID: a number from 0 to 2147483647`, ``},
+		{`dit_structure_rule "2147483648" { form = "f" }`, `Invalid rule ID`, `dit_structure_rule "2147483647" { form = "f" }`},
+		{blk(`dit_structure_rule "r"`, `id = 2147483648`, `form = "f"`), `a.hcl:2:6: Invalid id: id must be a rule ID, a whole number from 0 to 2147483647`, ``},
+		{blk(`dit_structure_rule "r"`, `id = 1.5`, `form = "f"`), `Invalid id`, ``},
+		{blk(`dit_structure_rule "r"`, `id = -1`, `form = "f"`), `a.hcl:2:6: Not a literal`, ``},
+		{blk(`dit_structure_rule "r"`, `id = "1"`, `form = "f"`), `Invalid id`, ``},
+		{blk(`dit_structure_rule "r"`, `id = 1`, `form = "f"`, `sup = [1, "2"]`), `a.hcl:4:7: Invalid sup`, blk(`dit_structure_rule "r"`, `id = 1`, `form = "f"`, `sup = [1, 2]`)},
+		{blk(`dit_structure_rule "r"`, `id = 1`, `form = "f"`, `sup = []`), `sup must be a list of rule IDs`, ``},
+		{blk(`dit_structure_rule "r"`, `id = 1`, `form = "f"`, `sup = 2`), `sup must be a list of rule IDs`, ``},
+		{blk(`dit_structure_rule "r"`, `id = 1`, `form = "f a"`), `Invalid form`, ``},
+		{blk(`dit_structure_rule "r_s"`, `id = 1`, `form = "f"`), `a.hcl:1:20: Invalid name`, ``},
+		{blk(`dit_structure_rule "r"`, `id = 1`, `names = ["9"]`, `form = "f"`), `a.hcl:3:9: Invalid name`, ``},
+		{blk(`dit_structure_rule "r"`, `id = 1`, `form = "f"`) + "\n" + blk(`dit_structure_rule "R"`, `id = 2`, `form = "f"`), `Duplicate definition: dit_structure_rule name "r"`, ``},
+		{`dit_structure_rule "1" { form = "f" }` + "\n" + blk(`dit_structure_rule "r"`, `id = 1`, `form = "f"`), `a.hcl:2:1: Duplicate definition: dit_structure_rule "1" is already defined at a.hcl:1`, ``},
 	} {
 		_, err := decode(c.src)
 		var he *Error
@@ -347,6 +505,7 @@ func FuzzDecode(f *testing.F) {
 	f.Add([]byte(example))
 	f.Add([]byte(`attribute_type "a" { oid = "1.1"` + "\n" + `syntax = "1.2"` + "\n" + `extensions = { X-A = ["${"$"}"] } }`))
 	f.Add([]byte(`ldap_syntax "1.2" { desc = "%%{x}" }`))
+	f.Add([]byte(rules))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		d, err := Decode(schema.File{Name: "fuzz.hcl", Data: data})
 		if err != nil {

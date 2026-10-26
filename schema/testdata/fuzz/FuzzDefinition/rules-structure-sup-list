@@ -1,0 +1,2 @@
+go test fuzz v1
+string("( 2147483647 NAME ( 'r' 's' ) DESC 'x\\27' OBSOLETE FORM f SUP ( 0 2147483647 ) X-A ( 'b' ) )")

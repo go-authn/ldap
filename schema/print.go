@@ -4,6 +4,7 @@ package schema
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -177,11 +178,58 @@ func (c *ObjectClass) print(w *printer) string {
 	return w.close(c.Extensions)
 }
 
+func (r *DITContentRule) String() string { return r.print(&printer{}) }
+
+func (r *DITContentRule) print(w *printer) string {
+	w.open(r.OID)
+	w.common(r.Names, r.Desc, r.Obsolete)
+	w.oids("AUX", r.Aux)
+	w.oids("MUST", r.Must)
+	w.oids("MAY", r.May)
+	w.oids("NOT", r.Not)
+	return w.close(r.Extensions)
+}
+
+func (f *NameForm) String() string { return f.print(&printer{}) }
+
+func (f *NameForm) print(w *printer) string {
+	w.open(f.OID)
+	w.common(f.Names, f.Desc, f.Obsolete)
+	w.str("OC", f.OC, false)
+	w.oids("MUST", f.Must)
+	w.oids("MAY", f.May)
+	return w.close(f.Extensions)
+}
+
+func (r *DITStructureRule) String() string { return r.print(&printer{}) }
+
+func (r *DITStructureRule) print(w *printer) string {
+	w.open(strconv.Itoa(r.ID))
+	w.common(r.Names, r.Desc, r.Obsolete)
+	w.str("FORM", r.Form, false)
+	if len(r.Sup) > 0 {
+		ids := make([]string, len(r.Sup))
+		for i, id := range r.Sup {
+			ids[i] = strconv.Itoa(id)
+		}
+		w.gap()
+		w.b.WriteString("SUP ")
+		w.list(ids, func(s string) string { return s }, " ")
+	}
+	return w.close(r.Extensions)
+}
+
 // Format writes the definitions as an OpenLDAP .schema file
 // (slapd.conf(5)), which Read reads back to the same Definitions: the
 // macros first, in an order where each is defined before it is used, then
 // the syntaxes, matching rules, attribute types and object classes, each
-// in the order it has here.
+// in the order it has here, then the DIT content rules, name forms and DIT
+// structure rules.
+//
+// ⛔ slapd.conf(5) has a ditcontentrule directive and NONE for name forms or
+// structure rules (OpenLDAP implements neither), so a file that holds one
+// is written with this package's own keywords, nameform and
+// ditstructurerule, which Read reads and slapd refuses.
 //
 // With macros, the OID of every definition and the SYNTAX of an attribute
 // type -- the places slapd expands a macro (servers/slapd/at.c, oc.c) --
@@ -235,6 +283,19 @@ func (d *Definitions) Format(macros bool) ([]byte, error) {
 		c := *x
 		c.OID = short(c.OID)
 		def("objectclass", &c)
+	}
+	for _, x := range d.DITContentRules {
+		c := *x
+		c.OID = short(c.OID)
+		def("ditcontentrule", &c)
+	}
+	for _, x := range d.NameForms {
+		c := *x
+		c.OID = short(c.OID)
+		def("nameform", &c)
+	}
+	for _, x := range d.DITStructureRules {
+		def("ditstructurerule", x)
 	}
 	if bad != nil {
 		return nil, bad

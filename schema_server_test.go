@@ -4,6 +4,7 @@ package ldap
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os/exec"
 	"strings"
@@ -251,6 +252,51 @@ func TestTheSubschemaEntryIsValidAgainstItself(t *testing.T) {
 	c := newConn(&Server{Schema: s, NamingContexts: []string{"dc=example,dc=org"}}, nil)
 	if err := c.rootDSE().Validate(s); err != nil {
 		t.Errorf("the root DSE: %v", err)
+	}
+}
+
+// ⛔ The rules are published when the schema has them, and only then: each
+// value reads back with its own parser to the value published, and the
+// subentry holding them passes the schema it publishes.
+func TestTheSubschemaPublishesTheRulesItEnforces(t *testing.T) {
+	plain := subschemaEntry(schema.Standard())
+	for _, name := range []string{"dITContentRules", "nameForms", "dITStructureRules"} {
+		if plain.Attribute(name) != nil {
+			t.Errorf("%s published by a schema that has none", name)
+		}
+	}
+	s, err := schema.Build(append(schema.StandardFiles(), schema.File{Name: "rules.schema", Data: []byte(
+		"ditcontentrule ( 2.5.6.5 NAME 'unitRule' AUX extensibleObject NOT seeAlso X-ORIGIN 'test' )\n" +
+			"nameform ( 1.3.6.1.4.1.32473.1.2.2 NAME 'ouForm' OC organizationalUnit MUST ou )\n" +
+			"nameform ( 1.3.6.1.4.1.32473.1.2.1 NAME 'domainForm' OC domain MUST dc )\n" +
+			"ditstructurerule ( 1 NAME 'suffix' FORM domainForm )\n" +
+			"ditstructurerule ( 2 NAME 'container' DESC 'it\\27s' FORM ouForm SUP ( 1 2 ) )\n")})...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := subschemaEntry(s)
+	for _, c := range []struct {
+		name  string
+		n     int
+		parse func(string) (fmt.Stringer, error)
+	}{
+		{"dITContentRules", 1, func(v string) (fmt.Stringer, error) { return schema.ParseDITContentRule(v) }},
+		{"nameForms", 2, func(v string) (fmt.Stringer, error) { return schema.ParseNameForm(v) }},
+		{"dITStructureRules", 2, func(v string) (fmt.Stringer, error) { return schema.ParseDITStructureRule(v) }},
+	} {
+		a := e.Attribute(c.name)
+		if a == nil || !a.Operational || len(a.Values) != c.n {
+			t.Fatalf("%s: %+v", c.name, a)
+		}
+		for _, v := range a.Values {
+			x, err := c.parse(string(v))
+			if err != nil || x.String() != string(v) {
+				t.Errorf("%s: %s reads back as %v %v", c.name, v, x, err)
+			}
+		}
+	}
+	if err := e.Validate(s); err != nil {
+		t.Error(err)
 	}
 }
 

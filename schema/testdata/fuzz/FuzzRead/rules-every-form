@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("objectidentifier e 1.9\nditcontentrule ( e:1\n\tNOT a\n\tAUX ( b $ c ) )\nnameform ( e:2 MUST a OC c MAY d )\nditstructurerule ( 3 SUP ( 1 2 ) FORM e:2 )\n\ndn: cn=x\nolcDitContentRules: {0}( 1.1 MUST a )\nnameForms: ( 1.2 OC c MUST a )\ndITStructureRules: ( 0 FORM 1.2 SUP 0 )\n")

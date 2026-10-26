@@ -31,6 +31,21 @@ func strip(x any) any {
 		c := *v
 		c.Pos = Position{}
 		return &c
+	case *DITContentRule:
+		c := *v
+		c.class, c.aux, c.must, c.may, c.not, c.auxSet, c.notSet = nil, nil, nil, nil, nil, nil, nil
+		c.Pos = Position{}
+		return &c
+	case *NameForm:
+		c := *v
+		c.class, c.must, c.may = nil, nil, nil
+		c.Pos = Position{}
+		return &c
+	case *DITStructureRule:
+		c := *v
+		c.form, c.sup = nil, nil
+		c.Pos = Position{}
+		return &c
 	}
 	return x
 }
@@ -50,6 +65,15 @@ func unplaced(d *Definitions) *Definitions {
 	}
 	for _, x := range d.ObjectClasses {
 		out.ObjectClasses = append(out.ObjectClasses, strip(x).(*ObjectClass))
+	}
+	for _, x := range d.DITContentRules {
+		out.DITContentRules = append(out.DITContentRules, strip(x).(*DITContentRule))
+	}
+	for _, x := range d.NameForms {
+		out.NameForms = append(out.NameForms, strip(x).(*NameForm))
+	}
+	for _, x := range d.DITStructureRules {
+		out.DITStructureRules = append(out.DITStructureRules, strip(x).(*DITStructureRule))
 	}
 	return out
 }
@@ -246,8 +270,15 @@ func FuzzDefinition(f *testing.F) {
 	f.Add(`( 1.2 NAME ( 'a' 'b' ) DESC 'q\27\5c' SUP x X-A ( 'p' 'q' ) )`)
 	f.Add(`( 1.2 SYNTAX 1.2{64} )`)
 	f.Add(`( 1.2 APPLIES ( a $ b ) )`)
+	f.Add(`( 2.5.6.6 NAME 'r' DESC 'd' OBSOLETE AUX ( a $ b ) MUST c MAY ( d $ e ) NOT f X-A 'g' )`)
+	f.Add(`( 1.2 NAME 'f' OC person MUST ( cn $ sn ) MAY uid )`)
+	f.Add(`( 2147483647 NAME 'r' FORM f SUP ( 0 1 2 ) X-B ( ) )`)
+	f.Add(`( 1 FORM f SUP (2 3) )`)
 	f.Fuzz(func(t *testing.T, in string) {
 		for _, p := range []func(string) (interface{ String() string }, error){
+			func(s string) (interface{ String() string }, error) { return ParseDITContentRule(s) },
+			func(s string) (interface{ String() string }, error) { return ParseNameForm(s) },
+			func(s string) (interface{ String() string }, error) { return ParseDITStructureRule(s) },
 			func(s string) (interface{ String() string }, error) { return ParseAttributeType(s) },
 			func(s string) (interface{ String() string }, error) { return ParseObjectClass(s) },
 			func(s string) (interface{ String() string }, error) { return ParseMatchingRule(s) },

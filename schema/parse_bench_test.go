@@ -49,6 +49,57 @@ func BenchmarkParseCosine(b *testing.B) {
 	}
 }
 
+// BenchmarkParseRules is the three rule parsers on the rules of
+// rules_test.go, printed in RFC 4512 form; bench/libldap compares them with
+// libldap's.
+func BenchmarkParseRules(b *testing.B) {
+	d, err := Read(File{"rules.schema", []byte(rulesFile)})
+	if err != nil {
+		b.Fatal(err)
+	}
+	var crs, nfs, srs []string
+	for _, x := range d.DITContentRules {
+		crs = append(crs, x.String())
+	}
+	for _, x := range d.NameForms {
+		nfs = append(nfs, x.String())
+	}
+	for _, x := range d.DITStructureRules {
+		srs = append(srs, x.String())
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		for _, s := range crs {
+			if _, err := ParseDITContentRule(s); err != nil {
+				b.Fatal(err)
+			}
+		}
+		for _, s := range nfs {
+			if _, err := ParseNameForm(s); err != nil {
+				b.Fatal(err)
+			}
+		}
+		for _, s := range srs {
+			if _, err := ParseDITStructureRule(s); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
+// BenchmarkGoverningStructureRule is the check a server makes of each
+// entry it places: an account under ou=people.
+func BenchmarkGoverningStructureRule(b *testing.B) {
+	s := rulesSchema(b)
+	e, sup := alice(), s.DITStructureRule(2)
+	b.ReportAllocs()
+	for b.Loop() {
+		if r, err := s.GoverningStructureRule(e, sup); err != nil || r.ID != 3 {
+			b.Fatal(r, err)
+		}
+	}
+}
+
 // BenchmarkReadCosine is the whole of Read on cosine.schema: the file
 // unwrapped into definitions, each one parsed in the OpenLDAP dialect.
 func BenchmarkReadCosine(b *testing.B) {

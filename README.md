@@ -145,8 +145,10 @@ was; nothing changes for a deployment that does not set it.
 
 **What is there.**
 
-- Types for syntaxes, matching rules, matching rule uses, attribute types
-  and object classes, and a parser and printer for their RFC 4512 4.1 forms.
+- Types for syntaxes, matching rules, matching rule uses, attribute types,
+  object classes, **DIT content rules, name forms and DIT structure rules**
+  (RFC 4512 4.1.6, 4.1.7), and a parser and printer for their RFC 4512 4.1
+  forms.
   The parser is strict -- terms in the ABNF's order, SP is spaces -- and a
   refusal says at which byte (`*schema.ParseError`). Files are read as
   slapd reads them; see
@@ -163,10 +165,16 @@ was; nothing changes for a deployment that does not set it.
   matching the message. It carries:
   - `Kind`, one of every check Build makes: `UnknownReference`,
     `DuplicateOID`, `DuplicateName`, `SuperiorCycle`, `KindViolation`
-    (RFC 4512 2.4.1-2.4.3), `UsageMismatch` and `CollectiveMismatch` (2.5.1),
-    `UsageViolation` (4.1.2);
-  - `Element` (syntax, matching rule, attribute type, object class), `OID`
-    and `Name` (the first NAME) of the refused definition, and its `Pos`;
+    (RFC 4512 2.4.1-2.4.3; a content rule or name form for a class that is
+    not structural, an AUX class that is not auxiliary), `UsageMismatch` and
+    `CollectiveMismatch` (2.5.1), `UsageViolation` (4.1.2),
+    `DuplicateMember` (a type listed twice in a rule, or in a name form's
+    MUST and MAY, 4.1.7.2) and `PrecludedRequired` (a NOT naming a type the
+    rule, its class or an AUX class requires, 4.1.6);
+  - `Element` (syntax, matching rule, attribute type, object class, DIT
+    content rule, name form, DIT structure rule), `OID` -- a structure
+    rule's is its rule ID -- and `Name` (the first NAME) of the refused
+    definition, and its `Pos`;
   - `Field`, the term at fault (`SUP`, `EQUALITY`, `SYNTAX`, `MUST`, `NAME`
     ...), and `Ref`: the undefined name or OID, or the other definition --
     for a duplicate the first one, for a kind or usage rule the superior --
@@ -202,6 +210,35 @@ was; nothing changes for a deployment that does not set it.
   outside MUST/MAY unless `extensibleObject`, SINGLE-VALUE, known types,
   options and classes, distinct descriptions, no equivalent values, values of
   their syntax, and the RDN's values in the entry. Every problem is named.
+- **DIT content rules are enforced by `Validate`** (RFC 4512 4.1.6), for the
+  entry's structural class itself, not its superclasses: an auxiliary class
+  not in the rule's AUX is refused (`AuxiliaryNotAllowed`), its MUST is
+  required, its NOT is refused even in an `extensibleObject` (`Precluded`),
+  its MAY is allowed. An OBSOLETE rule is not active. Without a rule,
+  auxiliary classes are allowed, as slapd allows them;
+  `ValidateWith(e, schema.ValidateOptions{StrictAuxiliary: true})` refuses
+  them, as RFC 4512 2.4.3 says.
+- **Name forms are enforced by `Validate`** (4.1.7.2): when the structural
+  class has active name forms, the RDN uses all the MUST types of one of
+  them and nothing outside its MUST and MAY (`NameFormViolation`).
+- **DIT structure rules: `(*Schema).GoverningStructureRule(entry, superior)`**
+  (4.1.7.1, X.501 13.7.5) returns the rule that governs an entry placed under
+  an entry governed by `superior`, or, with `superior` nil, at the root of
+  the subtree (a rule with no SUP). The rule's name form must be for the
+  entry's structural class itself and allow its RDN. No rule is a
+  `NoStructureRule` or `NameFormViolation` problem. A schema with no active
+  structure rule governs nothing: the result is nil, nil. A server checks a
+  tree from its root down, each entry's rule being its subordinates'
+  `superior`:
+
+  ```go
+  root, err := s.GoverningStructureRule(suffix, nil)    // dc=example,dc=org
+  people, err := s.GoverningStructureRule(ouPeople, root)
+  _, err = s.GoverningStructureRule(alice, people)       // uid=alice,ou=people,...
+  ```
+
+  A rule may name itself in SUP (`ou` under `ou`). Rule IDs are at most
+  `schema.MaxRuleID` (2^31-1), the same on 32-bit platforms.
 - Matching rules (RFC 4517 4.2): caseIgnore, caseExact, caseIgnoreIA5,
   caseExactIA5, octetString, integer, numericString, distinguishedName,
   objectIdentifier, boolean, telephoneNumber, generalizedTime, bitString,
@@ -219,8 +256,9 @@ was; nothing changes for a deployment that does not set it.
   library, like the root DSE: `objectClass: top, subentry, subschema`, `cn`,
   the operational `subtreeSpecification: {}` that RFC 3672's `subentry`
   requires, and `ldapSyntaxes`, `matchingRules`, `matchingRuleUse`,
-  `attributeTypes` and `objectClasses`, which come only when asked for by
-  name or with `+`. The entry passes `Validate` against the schema it
+  `attributeTypes` and `objectClasses` -- and `dITContentRules`, `nameForms`
+  and `dITStructureRules` when the schema has any, since each is enforced --
+  which come only when asked for by name or with `+`. The entry passes `Validate` against the schema it
   publishes. It is behind the `RequireTLS` gate; the root DSE alone is in
   front of it, because that is where StartTLS is advertised.
 - Filters are evaluated with the schema's rules in RFC 4511's three-valued
@@ -248,11 +286,17 @@ still makes `>=` Undefined.
 
 **What is deliberately not there.**
 
-- DIT content rules, DIT structure rules and name forms: not parsed, not
-  enforced, not published. So `Validate` allows auxiliary classes, which RFC
-  4512 2.4.3 strictly forbids when no DIT content rule exists -- every
-  server in use does the same, and refusing every posixAccount would make
-  the package useless. It is the one departure from the RFC's letter.
+- By default, auxiliary classes on an entry whose structural class has no
+  DIT content rule. RFC 4512 2.4.3 forbids them. slapd allows them: its
+  check (`SLAP_DISALLOW_AUX_WO_CR`, `servers/slapd/schema_check.c`) is
+  behind a flag no `disallow` verb of slapd.conf(5) sets. Refusing every
+  posixAccount in a schema without rules would make the package useless, so
+  this is the default, and `ValidateOptions.StrictAuxiliary` is the RFC.
+- Name forms and structure rules in slapd's own files: slapd.conf(5) and
+  slapd-config(5) have `ditcontentrule`/`olcDitContentRules` and nothing for
+  the other two, which OpenLDAP does not implement. `Format` writes them with
+  this package's keywords `nameform` and `ditstructurerule`, which `Read`
+  reads and slapd refuses.
 - Changing the schema over LDAP (Modify on `cn=Subschema`). A Schema is
   built from files and read-only.
 - `directoryStringFirstComponentMatch` and RFC 4523's certificate rules are
@@ -284,9 +328,11 @@ for slapd:
 - **Two forms.** A file whose first line that is not a comment is
   `name: value` is LDIF (RFC 2849). That covers OpenLDAP's cn=config form
   (`olcObjectIdentifier`, `olcLdapSyntaxes`, `olcAttributeTypes`,
-  `olcObjectClasses`, with the `{N}` prefix stripped, slapd-config(5)) and
-  the subschema subentry's own attributes (RFC 4512 4.2). Anything else is
-  the `.schema` form (slapd.conf(5)).
+  `olcObjectClasses`, `olcDitContentRules`, with the `{N}` prefix stripped,
+  slapd-config(5)) and the subschema subentry's own attributes (RFC 4512
+  4.2, `dITContentRules`, `nameForms` and `dITStructureRules` included).
+  Anything else is the `.schema` form (slapd.conf(5)): `ditcontentrule` is
+  slapd's keyword, `nameform` and `ditstructurerule` this package's.
 - **Two kinds of line continuation.** In a `.schema` file, a line that starts
   with white space continues the line before it. slapd's `fp_getline`
   replaces that first white space character with one space and keeps the
@@ -365,6 +411,22 @@ its lists.
   `TestBothAccept` checks that both parsers accept every definition, so the
   timing compares like with like.
 
+**The rule parsers** against libldap's `ldap_str2contentrule`,
+`ldap_str2nameform` and `ldap_str2structurerule`, on a content rule, a name
+form and a structure rule made from each of cosine.schema's 13 classes
+(`BenchmarkParseRules`, no published file holds such rules), one core:
+
+| one pass over the 39 rules | time | allocations |
+| --- | --- | --- |
+| go-authn/ldap v0.11.0 | 12.2 µs | 157, 18.6 KiB |
+| libldap (macOS system library) | 21.2 µs | (malloc, not counted) |
+
+⚠ One run each, at a 1-minute load of 18: provisional, like the table
+above. ⛔ The structure rules carry no SUP, because
+`ldap_str2structurerule` has no branch for SUP and refuses a rule that has
+one, though RFC 4512 4.1.7.1 defines it and libldap's own
+`ldap_structurerule2bv` writes it (`TestLibldapRefusesSUP`).
+
 ### Schemas in HCL: package `schema/hclschema`
 
 `hclschema.Decode(files...)` reads HCL2 into the same `*schema.Definitions`.
@@ -400,15 +462,40 @@ object_class "supannPerson" {
 The example is the one `TestDecodeTheExample` decodes and builds.
 
 - **One block per definition.** The block type is the kind of definition:
-  `object_identifier`, `ldap_syntax`, `matching_rule`, `attribute_type` or
-  `object_class`.
+  `object_identifier`, `ldap_syntax`, `matching_rule`, `attribute_type`,
+  `object_class`, `dit_content_rule`, `name_form` or `dit_structure_rule`:
+
+  ```hcl
+  dit_content_rule "accountRule" {
+    oid  = "0.9.2342.19200300.100.4.5"   # the structural class's OID
+    aux  = ["posixAccount", "shadowAccount"]
+    must = ["description"]
+    not  = ["seeAlso"]
+  }
+
+  name_form "accountForm" {
+    oid  = "1.3.6.1.4.1.32473.1.2.3"
+    oc   = "account"
+    must = ["uid"]
+  }
+
+  dit_structure_rule "people" {
+    id   = 3            # a rule ID, not an OID
+    form = "accountForm"
+    sup  = [2]
+  }
+  ```
 - **The label** is the first NAME. `names` lists the others. A definition
   with no NAME is labelled with its OID and has no `oid`. A syntax never has
-  a NAME.
+  a NAME. A structure rule is labelled the same way with its rule ID, and
+  `id` is a number.
 - **The attributes are RFC 4512 4.1's terms**, in lower case with
   underscores: `desc`, `obsolete`, `sup`, `equality`, `ordering`, `substr`,
   `syntax`, `single_value`, `collective`, `no_user_modification`, `usage`,
-  `kind`, `must`, `may`.
+  `kind`, `must`, `may`, `aux`, `not`, `oc`, `form`. A structure rule's
+  `sup` is a list of rule IDs.
+  - A string that is not UTF-8 is refused (found by `FuzzDecode`: it
+    decoded, then encoded to another string).
   - The `{len}` of noidlen is `syntax_len`, a number, because it is not part
     of the OID.
   - `extensions` maps each `X-` name to its list of strings. It is read item
@@ -462,7 +549,8 @@ Output goes to stdout.
   - the definitions `schema.Standard()` already has, identical or not. A
     difference in DESC alone is counted; every other difference is listed
     with its fields.
-  - EVERY reference that nothing defines. `Build` stops at the first.
+  - EVERY reference that nothing defines, the rules' included (a class, a
+    type, a name form, a superior rule ID). `Build` stops at the first.
   - the verdict of `BuildFrom`.
 
 From `TestConvertBothWays`:

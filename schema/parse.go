@@ -4,6 +4,8 @@ package schema
 
 import (
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -419,12 +421,17 @@ const (
 	tMust
 	tMay
 	tApplies
+	tAux
+	tNot
+	tOC
+	tForm
+	tCount // how many terms there are; not a term
 )
 
 // A grammar is the terms a kind of definition allows: grammar[t] is t's
 // rank in the order the ABNF gives them, or -1 when t is not allowed. It
 // is built once per kind, not per definition read.
-type grammar [tApplies + 1]int8
+type grammar [tCount]int8
 
 func newGrammar(terms ...term) *grammar {
 	g := new(grammar)
@@ -444,6 +451,10 @@ var (
 	attributeTypeTerms   = newGrammar(tName, tDesc, tObsolete, tSup, tEquality, tOrdering, tSubstr,
 		tSyntax, tSingleValue, tCollective, tNoUserMod, tUsage)
 	objectClassTerms = newGrammar(tName, tDesc, tObsolete, tSup, tKind, tMust, tMay)
+	// RFC 4512 4.1.6, 4.1.7.2 and 4.1.7.1, in their ABNF's order.
+	contentRuleTerms   = newGrammar(tName, tDesc, tObsolete, tAux, tMust, tMay, tNot)
+	nameFormTerms      = newGrammar(tName, tDesc, tObsolete, tOC, tMust, tMay)
+	structureRuleTerms = newGrammar(tName, tDesc, tObsolete, tForm, tSup)
 )
 
 // termWord is the term a keyword, in capitals, names. A switch, which the
@@ -483,6 +494,14 @@ func termWord(up string) (term, bool) {
 		return tMay, true
 	case "APPLIES":
 		return tApplies, true
+	case "AUX":
+		return tAux, true
+	case "NOT":
+		return tNot, true
+	case "OC":
+		return tOC, true
+	case "FORM":
+		return tForm, true
 	}
 	return 0, false
 }
@@ -490,11 +509,25 @@ func termWord(up string) (term, bool) {
 // definition reads LPAREN WSP numericoid, then each `SP term` in the order
 // allowed, then extensions WSP RPAREN, calling each term's reader.
 func (p *parser) definition(allowed *grammar, read func(t term, keyword string) error) (string, []Extension, error) {
+	return p.definitionOf(false, allowed, read)
+}
+
+// definitionOf is definition, or, with ruleID, the definition of a DIT
+// structure rule, which starts with its ruleid rather than a numericoid
+// (RFC 4512 4.1.7.1). A flag and not a func: a method value passed here
+// would be allocated for every definition read.
+func (p *parser) definitionOf(ruleID bool, allowed *grammar, read func(t term, keyword string) error) (string, []Extension, error) {
 	if err := p.expect('('); err != nil {
 		return "", nil, err
 	}
 	p.spaces()
-	oid, err := p.numericoid()
+	var oid string
+	var err error
+	if ruleID {
+		oid, err = p.ruleid()
+	} else {
+		oid, err = p.numericoid()
+	}
 	if err != nil {
 		return "", nil, err
 	}
@@ -757,6 +790,170 @@ func parseObjectClass(p *parser) (*ObjectClass, error) {
 	}
 	out.OID, out.Extensions = oid, exts
 	return out, nil
+}
+
+// ParseDITContentRule reads a DITContentRuleDescription (RFC 4512 4.1.6).
+func ParseDITContentRule(s string) (*DITContentRule, error) {
+	return parseDITContentRule(&parser{s: s})
+}
+
+func parseDITContentRule(p *parser) (*DITContentRule, error) {
+	out := &DITContentRule{}
+	oid, exts, err := p.definition(contentRuleTerms, func(t term, _ string) (err error) {
+		var list *[]string
+		switch t {
+		case tAux:
+			list = &out.Aux
+		case tMust:
+			list = &out.Must
+		case tMay:
+			list = &out.May
+		case tNot:
+			list = &out.Not
+		default:
+			return p.common(t, &out.Names, &out.Desc, &out.Obsolete)
+		}
+		if err = p.arg(); err == nil {
+			*list, err = p.oids()
+		}
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	out.OID, out.Extensions = oid, exts
+	return out, nil
+}
+
+// ParseNameForm reads a NameFormDescription (RFC 4512 4.1.7.2).
+func ParseNameForm(s string) (*NameForm, error) { return parseNameForm(&parser{s: s}) }
+
+func parseNameForm(p *parser) (*NameForm, error) {
+	out := &NameForm{}
+	oid, exts, err := p.definition(nameFormTerms, func(t term, _ string) (err error) {
+		switch t {
+		case tOC:
+			if err = p.arg(); err == nil {
+				out.OC, err = p.oid()
+			}
+		case tMust:
+			if err = p.arg(); err == nil {
+				out.Must, err = p.oids()
+			}
+		case tMay:
+			if err = p.arg(); err == nil {
+				out.May, err = p.oids()
+			}
+		default:
+			return p.common(t, &out.Names, &out.Desc, &out.Obsolete)
+		}
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	// RFC 4512 4.1.7.2: SP "OC" SP oid and SP "MUST" SP oids are not in
+	// brackets: a name form names its class and at least one type.
+	if out.OC == "" || out.Must == nil {
+		return nil, &ParseError{Offset: len(p.s), Msg: "a name form must name its OC and its MUST (RFC 4512 4.1.7.2)"}
+	}
+	out.OID, out.Extensions = oid, exts
+	return out, nil
+}
+
+// ParseDITStructureRule reads a DITStructureRuleDescription (RFC 4512
+// 4.1.7.1). The rule ID, and each of SUP, is at most MaxRuleID.
+//
+// The ABNF writes `SP "SUP" ruleids`, with no SP between the keyword and
+// its value as every other term has; libldap's ldap_structurerule2bv
+// (libraries/libldap/schema.c) writes one, and so do this printer and
+// this parser.
+func ParseDITStructureRule(s string) (*DITStructureRule, error) {
+	return parseDITStructureRule(&parser{s: s})
+}
+
+func parseDITStructureRule(p *parser) (*DITStructureRule, error) {
+	out := &DITStructureRule{}
+	id, exts, err := p.definitionOf(true, structureRuleTerms, func(t term, _ string) (err error) {
+		switch t {
+		case tForm:
+			if err = p.arg(); err == nil {
+				out.Form, err = p.oid()
+			}
+		case tSup:
+			if err = p.arg(); err == nil {
+				out.Sup, err = p.ruleids()
+			}
+		default:
+			return p.common(t, &out.Names, &out.Desc, &out.Obsolete)
+		}
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if out.Form == "" {
+		return nil, &ParseError{Offset: len(p.s), Msg: "a DIT structure rule must name its FORM (RFC 4512 4.1.7.1)"}
+	}
+	out.ID, _ = ruleNumber(id) // ruleid checked it
+	out.Extensions = exts
+	return out, nil
+}
+
+// ruleid = number (RFC 4512 4.1.7.1), at most MaxRuleID.
+func (p *parser) ruleid() (string, error) {
+	start := p.pos
+	w := p.word()
+	if !isNumber(w) {
+		p.pos = start
+		found := strconv.Quote(w)
+		if w == "" {
+			found = p.found()
+		}
+		return "", p.fail("expected a rule ID, a number (RFC 4512 4.1.7.1), found %s", found)
+	}
+	if _, ok := ruleNumber(w); !ok {
+		p.pos = start
+		return "", p.fail("the rule ID %s is more than %d", w, MaxRuleID)
+	}
+	return w, nil
+}
+
+// ruleNumber is a number, as isNumber has it, that is at most MaxRuleID.
+func ruleNumber(w string) (int, bool) {
+	n, err := strconv.ParseInt(w, 10, 32) // MaxRuleID is the largest int32
+	return int(n), err == nil && n >= 0
+}
+
+// ruleids = ruleid / ( LPAREN WSP ruleidlist WSP RPAREN )
+// ruleidlist = ruleid *( SP ruleid )
+func (p *parser) ruleids() ([]int, error) {
+	var buf [listBuf]int
+	out := buf[:0]
+	paren := p.peek() == '('
+	if paren {
+		p.pos++
+		p.spaces()
+	}
+	for {
+		w, err := p.ruleid()
+		if err != nil {
+			return nil, err
+		}
+		n, _ := ruleNumber(w)
+		out = append(out, n)
+		if !paren {
+			return slices.Clone(out), nil
+		}
+		gap := p.spaces()
+		if p.peek() == ')' {
+			p.pos++
+			return slices.Clone(out), nil
+		}
+		if gap == 0 {
+			return nil, p.fail("expected a space or ')' after a rule ID, found %s", p.found())
+		}
+	}
 }
 
 // --- RFC 4512 1.4 ---------------------------------------------------------

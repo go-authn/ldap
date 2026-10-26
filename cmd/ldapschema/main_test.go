@@ -113,11 +113,44 @@ func TestCheckReports(t *testing.T) {
 		{"attributetype ( 1.9 NAME 'z' SUP cn USAGE dSAOperation )\n", 1, "x.schema:1:1: schema: the attribute type z is dSAOperation and its supertype cn is userApplications"},
 		{differing(t), 0,
 			"already in schema.Standard(), which is kept: 3 identical, 2 different (1 in DESC only)\n  differs: sn (Sup)\nbuild: ok, 0 definitions"},
+		// The rules: every reference they make that nothing defines.
+		{"ditcontentrule ( 1.9.9 NAME 'r' AUX nope MUST gone )\nnameform ( 1.9.8 NAME 'f' OC nada MUST cn MAY gone )\nditstructurerule ( 1 NAME 's' FORM g SUP 2 )\n", 1,
+			"read: 1 DIT content rules, 1 name forms, 1 DIT structure rules\n" +
+				"missing: object class 1.9.9, used by r\nmissing: object class nope, used by r\nmissing: attribute type gone, used by r, f\n" +
+				"missing: object class nada, used by f\nmissing: name form g, used by s\nmissing: DIT structure rule 2, used by s\n"},
+		{"nameform ( 1.9.8 NAME 'f' OC organizationalUnit MUST ou )\nditstructurerule ( 1 NAME 's' FORM f SUP 1 )\nditcontentrule ( 2.5.6.5 NOT seeAlso )\n", 0,
+			"build: ok, 3 definitions added to schema.Standard()\n"},
+		{"nameform ( 1.9.8 NAME 'f' OC top MUST ou )\n", 1, "x.schema:1:1: schema: the name form f names the abstract class top"},
 	} {
 		status, out, _ := ldapschema("check", write(t, "x.schema", c.text))
 		if status != c.status || !strings.Contains(out, c.want) {
 			t.Errorf("%s: %d\n%s\nwant %d %q", c.text, status, out, c.status, c.want)
 		}
+	}
+}
+
+// The rules go to HCL and back to the .schema form Format writes, and check
+// builds them.
+func TestTheRulesRoundTrip(t *testing.T) {
+	text := "ditcontentrule ( 2.5.6.5 NAME 'r' AUX extensibleObject NOT seeAlso )\n" +
+		"nameform ( 1.9.8 NAME 'f' OC organizationalUnit MUST ou )\n" +
+		"ditstructurerule ( 1 NAME 's' FORM f SUP ( 1 2 ) )\nditstructurerule ( 2 FORM f )\n"
+	src := write(t, "rules.schema", text)
+	status, h, stderr := ldapschema("to-hcl", src)
+	if status != 0 || !strings.Contains(h, "dit_structure_rule \"s\" {\n  id   = 1\n  form = \"f\"\n  sup  = [1, 2]\n}") {
+		t.Fatalf("to-hcl: %d %s\n%s", status, stderr, h)
+	}
+	status, back, stderr := ldapschema("to-schema", write(t, "rules.hcl", h))
+	d, err := schema.Read(schema.File{Name: "x", Data: []byte(text)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := d.Format(false)
+	if status != 0 || back != string(want) {
+		t.Errorf("to-schema: %d %s\n%s\nwant\n%s", status, stderr, back, want)
+	}
+	if status, out, _ := ldapschema("check", src); status != 0 || !strings.Contains(out, "build: ok, 4 definitions added") {
+		t.Errorf("check: %d\n%s", status, out)
 	}
 }
 

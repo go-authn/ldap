@@ -86,6 +86,56 @@ func TestEveryBuildErrorKind(t *testing.T) {
 			"extra:3:1: schema: the attribute type 1.9 is COLLECTIVE and directoryOperation (RFC 4512 4.1.2)"},
 		{"attributetype ( 1.9 SYNTAX 1.1.1\n NO-USER-MODIFICATION )", UsageViolation, ElementAttributeType, "1.9", "", "NO-USER-MODIFICATION", "", "", at("extra", 3), Position{},
 			"NO-USER-MODIFICATION and a user attribute"},
+
+		// DIT content rules (RFC 4512 4.1.6). 's' is structural, on line 5.
+		{"ditcontentrule ( 1.9\n NAME 'r' )", UnknownReference, ElementDITContentRule, "1.9", "r", "", "1.9", "", at("extra", 3), Position{},
+			"extra:3:1: schema: the DIT content rule r is for the object class 1.9, which is not defined"},
+		{"ditcontentrule ( 1.1.4\n NAME 'r' )", KindViolation, ElementDITContentRule, "1.1.4", "r", "", "top", "1.1.4", at("extra", 3), at("base", 5),
+			"the DIT content rule r is for the abstract class top, and a content rule is for a structural class (RFC 4512 4.1.6)"},
+		{"ditcontentrule ( 1.8\n AUX nope )\nobjectclass ( 1.8 NAME 's' SUP top )", UnknownReference, ElementDITContentRule, "1.8", "", "AUX", "nope", "", at("extra", 3), Position{},
+			"the DIT content rule 1.8 has AUX nope, which is not a defined object class"},
+		{"ditcontentrule ( 1.8\n AUX s )\nobjectclass ( 1.8 NAME 's' SUP top )", KindViolation, ElementDITContentRule, "1.8", "", "AUX", "s", "1.8", at("extra", 3), at("extra", 5),
+			"has AUX s, which is structural, not auxiliary (RFC 4512 4.1.6)"},
+		{"ditcontentrule ( 1.8\n AUX ( x $ X ) )\nobjectclass ( 1.8 NAME 's' SUP top )\nobjectclass ( 1.7 NAME 'x' SUP top AUXILIARY )", DuplicateMember, ElementDITContentRule, "1.8", "", "AUX", "X", "1.7", at("extra", 3), at("extra", 6),
+			"the DIT content rule 1.8 lists the class x twice"},
+		{"ditcontentrule ( 1.8\n MUST nope )\nobjectclass ( 1.8 NAME 's' SUP top )", UnknownReference, ElementDITContentRule, "1.8", "", "MUST", "nope", "", at("extra", 3), Position{},
+			"the DIT content rule 1.8 has MUST nope, which is not a defined attribute type"},
+		{"ditcontentrule ( 1.8\n MAY nope )\nobjectclass ( 1.8 NAME 's' SUP top )", UnknownReference, ElementDITContentRule, "1.8", "", "MAY", "nope", "", at("extra", 3), Position{},
+			"has MAY nope"},
+		{"ditcontentrule ( 1.8\n NOT nope )\nobjectclass ( 1.8 NAME 's' SUP top )", UnknownReference, ElementDITContentRule, "1.8", "", "NOT", "nope", "", at("extra", 3), Position{},
+			"has NOT nope"},
+		{"ditcontentrule ( 1.8\n MUST a NOT A )\nobjectclass ( 1.8 NAME 's' SUP top )", DuplicateMember, ElementDITContentRule, "1.8", "", "NOT", "A", "1.1.3", at("extra", 3), at("base", 4),
+			"the DIT content rule 1.8 lists the attribute type a twice"},
+		{"ditcontentrule ( 1.8\n NOT a )\nobjectclass ( 1.8 NAME 's' SUP top )", PrecludedRequired, ElementDITContentRule, "1.8", "", "NOT", "a", "1.1.3", at("extra", 3), at("base", 4),
+			"extra:3:1: schema: the DIT content rule 1.8 precludes a, which the class s requires (RFC 4512 4.1.6)"},
+		{"ditcontentrule ( 1.8\n NAME 'r2' )\nobjectclass ( 1.8 NAME 's' SUP top )\nditcontentrule ( 1.8 NAME 'r1' )", DuplicateOID, ElementDITContentRule, "1.8", "r1", "", "r2", "1.8", at("extra", 6), at("extra", 3),
+			"extra:6:1: schema: the DIT content rule 1.8 is defined twice (first defined at extra:3:1)"},
+		{"ditcontentrule ( 1.8\n NAME 'R' )\nobjectclass ( 1.8 NAME 's' SUP top )\nobjectclass ( 1.7 NAME 't' SUP top )\nditcontentrule ( 1.7 NAME 'r' )", DuplicateName, ElementDITContentRule, "1.7", "r", "NAME", "r", "1.8", at("extra", 7), at("extra", 3),
+			`the name "r" is given to two DIT content rules`},
+
+		// Name forms (RFC 4512 4.1.7.2).
+		{"nameform ( 1.9 NAME 'f'\n OC nope MUST a )", UnknownReference, ElementNameForm, "1.9", "f", "OC", "nope", "", at("extra", 3), Position{},
+			"extra:3:1: schema: the name form f has OC nope, which is not a defined object class"},
+		{"nameform ( 1.9\n OC top MUST a )", KindViolation, ElementNameForm, "1.9", "", "OC", "top", "1.1.4", at("extra", 3), at("base", 5),
+			"the name form 1.9 names the abstract class top, and a name form names a structural class (X.501 13.7.2)"},
+		{"nameform ( 1.9\n OC s MUST nope )\nobjectclass ( 1.8 NAME 's' SUP top )", UnknownReference, ElementNameForm, "1.9", "", "MUST", "nope", "", at("extra", 3), Position{},
+			"the name form 1.9 has MUST nope, which is not a defined attribute type"},
+		{"nameform ( 1.9\n OC s MUST a MAY A )\nobjectclass ( 1.8 NAME 's' SUP top )", DuplicateMember, ElementNameForm, "1.9", "", "MAY", "A", "1.1.3", at("extra", 3), at("base", 4),
+			"the name form 1.9 lists the attribute type a twice"},
+		{"nameform ( 1.9\n OC s MUST a )\nobjectclass ( 1.8 NAME 's' SUP top )\nnameform ( 1.9 OC s MUST a )", DuplicateOID, ElementNameForm, "1.9", "", "", "1.9", "1.9", at("extra", 6), at("extra", 3),
+			"the name form 1.9 is defined twice"},
+
+		// DIT structure rules (RFC 4512 4.1.7.1). The OID is the rule ID.
+		{"ditstructurerule ( 7 NAME 'r'\n FORM nope )", UnknownReference, ElementDITStructureRule, "7", "r", "FORM", "nope", "", at("extra", 3), Position{},
+			"extra:3:1: schema: the DIT structure rule r has FORM nope, which is not a defined name form"},
+		{"ditstructurerule ( 7\n FORM f SUP 8 )\nobjectclass ( 1.8 NAME 's' SUP top )\nnameform ( 1.9 NAME 'f' OC s MUST a )", UnknownReference, ElementDITStructureRule, "7", "", "SUP", "8", "", at("extra", 3), Position{},
+			"the DIT structure rule 7 has the superior rule 8, which is not defined"},
+		{"ditstructurerule ( 7\n FORM f SUP ( 7 7 ) )\nobjectclass ( 1.8 NAME 's' SUP top )\nnameform ( 1.9 NAME 'f' OC s MUST a )", DuplicateMember, ElementDITStructureRule, "7", "", "SUP", "7", "7", at("extra", 3), at("extra", 3),
+			"the DIT structure rule 7 lists the superior rule 7 twice"},
+		{"ditstructurerule ( 7\n FORM f )\nobjectclass ( 1.8 NAME 's' SUP top )\nnameform ( 1.9 NAME 'f' OC s MUST a )\nditstructurerule ( 7 NAME 'again' FORM f )", DuplicateOID, ElementDITStructureRule, "7", "again", "", "7", "7", at("extra", 7), at("extra", 3),
+			"extra:7:1: schema: the DIT structure rule 7 is defined twice (X.501 13.7.5: a rule ID is unique in a subschema) (first defined at extra:3:1)"},
+		{"ditstructurerule ( 7 NAME 'r'\n FORM f )\nobjectclass ( 1.8 NAME 's' SUP top )\nnameform ( 1.9 NAME 'f' OC s MUST a )\nditstructurerule ( 8 NAME 'R' FORM f )", DuplicateName, ElementDITStructureRule, "8", "R", "NAME", "R", "7", at("extra", 7), at("extra", 3),
+			`the name "R" is given to two DIT structure rules`},
 	} {
 		be := buildErr(t, "# refused below\n\n"+c.extra)
 		got := *be
@@ -114,14 +164,16 @@ func TestBuildErrorTheREADMEShows(t *testing.T) {
 func TestBuildErrorNames(t *testing.T) {
 	want := map[BuildErrorKind]string{UnknownReference: "unknown reference", DuplicateOID: "duplicate OID", DuplicateName: "duplicate name",
 		SuperiorCycle: "superior cycle", KindViolation: "kind violation", UsageMismatch: "usage mismatch",
-		CollectiveMismatch: "collective mismatch", UsageViolation: "usage violation", 0: "BuildErrorKind(0)", 99: "BuildErrorKind(99)"}
+		CollectiveMismatch: "collective mismatch", UsageViolation: "usage violation", DuplicateMember: "duplicate member",
+		PrecludedRequired: "precluded required", 0: "BuildErrorKind(0)", 99: "BuildErrorKind(99)"}
 	for k, s := range want {
 		if k.String() != s {
 			t.Errorf("%d: %q, want %q", k, k.String(), s)
 		}
 	}
 	for e, s := range map[Element]string{ElementSyntax: "syntax", ElementMatchingRule: "matching rule",
-		ElementAttributeType: "attribute type", ElementObjectClass: "object class", 0: "Element(0)"} {
+		ElementAttributeType: "attribute type", ElementObjectClass: "object class", ElementDITContentRule: "DIT content rule",
+		ElementNameForm: "name form", ElementDITStructureRule: "DIT structure rule", 0: "Element(0)"} {
 		if e.String() != s {
 			t.Errorf("%d: %q, want %q", e, e.String(), s)
 		}
@@ -194,6 +246,8 @@ func FuzzBuildErrorPosition(f *testing.F) {
 		"dn: x\nattributeTypes: ( 1.1 NAME 'a' SY\n NTAX 1.1 )\nldapSyntaxes: ( 1.1 )\nobjectClasses: ( 1.2 NAME 'c' MUST b )\n",
 		"objectclass ( 1.1 NAME 'x' SUP y )\nobjectclass ( 1.2 NAME 'y' SUP x )\n",
 		"ldapsyntax ( 1.1 )\nattributetype ( 1.2 NAME 'a' SYNTAX 1.1 \\\nCOLLECTIVE USAGE dSAOperation )\n",
+		"ldapsyntax ( 1.1 )\nattributetype ( 1.2 NAME 'a' SYNTAX 1.1 )\nobjectclass ( 1.3 NAME 's' MUST a )\nditcontentrule ( 1.3\n NOT a )\n",
+		"nameform ( 1.2 NAME 'f' OC s MUST a )\nditstructurerule ( 1 FORM f )\nditstructurerule ( 1\n FORM f )\n",
 	} {
 		f.Add([]byte(s))
 	}

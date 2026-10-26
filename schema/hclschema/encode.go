@@ -4,6 +4,7 @@ package hclschema
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/go-authn/ldap/schema"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -22,7 +23,8 @@ type EncodeOptions struct {
 // Encode writes definitions as HCL that Decode reads back to the same
 // definitions. It writes ONE way, so that two encodings of the same
 // definitions are the same bytes: the object identifiers, then the
-// syntaxes, matching rules, attribute types and object classes, each in
+// syntaxes, matching rules, attribute types, object classes, DIT content
+// rules, name forms and DIT structure rules, each in
 // the order it has in d (which is the order of the files it was read
 // from); in a block, the attributes in RFC 4512 4.1's order of terms, and
 // a term only when it says something -- no "obsolete = false", no "usage"
@@ -84,6 +86,54 @@ func Encode(d *schema.Definitions, opt EncodeOptions) ([]byte, error) {
 		list(b, "must", x.Must)
 		list(b, "may", x.May)
 		if err := extensions(b, "object class "+x.Name(), x.Extensions); err != nil {
+			return nil, err
+		}
+	}
+	for _, x := range d.DITContentRules {
+		b := identity(block, "dit_content_rule", short(x.OID), x.Names)
+		str(b, "desc", x.Desc)
+		flag(b, "obsolete", x.Obsolete)
+		list(b, "aux", x.Aux)
+		list(b, "must", x.Must)
+		list(b, "may", x.May)
+		list(b, "not", x.Not)
+		if err := extensions(b, "DIT content rule "+x.Name(), x.Extensions); err != nil {
+			return nil, err
+		}
+	}
+	for _, x := range d.NameForms {
+		b := identity(block, "name_form", short(x.OID), x.Names)
+		str(b, "desc", x.Desc)
+		flag(b, "obsolete", x.Obsolete)
+		str(b, "oc", x.OC)
+		list(b, "must", x.Must)
+		list(b, "may", x.May)
+		if err := extensions(b, "name form "+x.Name(), x.Extensions); err != nil {
+			return nil, err
+		}
+	}
+	for _, x := range d.DITStructureRules {
+		// Labelled like the others: the first name, and then the rule ID is
+		// "id", or the rule ID when there is no name.
+		var b *hclwrite.Body
+		if len(x.Names) == 0 {
+			b = block("dit_structure_rule", strconv.Itoa(x.ID))
+		} else {
+			b = block("dit_structure_rule", x.Names[0])
+			b.SetAttributeValue("id", cty.NumberIntVal(int64(x.ID)))
+			list(b, "names", x.Names[1:])
+		}
+		str(b, "desc", x.Desc)
+		flag(b, "obsolete", x.Obsolete)
+		str(b, "form", x.Form)
+		if len(x.Sup) > 0 {
+			ids := make([]cty.Value, len(x.Sup))
+			for i, id := range x.Sup {
+				ids[i] = cty.NumberIntVal(int64(id))
+			}
+			b.SetAttributeValue("sup", cty.TupleVal(ids))
+		}
+		if err := extensions(b, "DIT structure rule "+x.Name(), x.Extensions); err != nil {
 			return nil, err
 		}
 	}
