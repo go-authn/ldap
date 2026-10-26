@@ -23,8 +23,11 @@ const MaxFileSize = 4 << 20
 //     matchingrule, attributetype or objectclass, in any case -- at the
 //     start of a line, and continues on the lines that start with white
 //     space; '#' starts a comment line. The continuation lines are joined
-//     with ONE space, so a definition copied from an RFC keeps the RFC's
-//     line breaks and reads as RFC 4512 4.1 wants it.
+//     as slapd joins them: the newline goes, the first white space
+//     character becomes one space and the rest of the indentation stays.
+//     ⛔ A DESC wrapped inside its quotes therefore keeps that indentation
+//     in its value, so the embedded files write each DESC on one line
+//     (TestEmbeddedDESCsCarryNoLineLayout).
 //   - LDIF (RFC 2849), when that first line is "name: value" -- "dn:",
 //     "version:", or an attribute: OpenLDAP's cn=config form
 //     (slapd-config(5): olcObjectIdentifier, olcLdapSyntaxes,
