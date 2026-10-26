@@ -2,7 +2,10 @@
 
 package schema
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
 
 // A Position is where a definition starts in the text it was read from.
 //
@@ -44,10 +47,14 @@ const (
 	ElementMatchingRule
 	ElementAttributeType
 	ElementObjectClass
+	ElementDITContentRule
+	ElementNameForm
+	ElementDITStructureRule
 )
 
 // String is the element as messages call it: "syntax", "matching rule",
-// "attribute type" or "object class".
+// "attribute type", "object class", "DIT content rule", "name form" or
+// "DIT structure rule".
 func (e Element) String() string {
 	switch e {
 	case ElementSyntax:
@@ -58,6 +65,12 @@ func (e Element) String() string {
 		return "attribute type"
 	case ElementObjectClass:
 		return "object class"
+	case ElementDITContentRule:
+		return "DIT content rule"
+	case ElementNameForm:
+		return "name form"
+	case ElementDITStructureRule:
+		return "DIT structure rule"
 	}
 	return fmt.Sprintf("Element(%d)", uint8(e))
 }
@@ -68,12 +81,17 @@ type BuildErrorKind uint8
 
 const (
 	// UnknownReference: a term names something not defined. Field is the
-	// term (SUP, EQUALITY, ORDERING, SUBSTR, SYNTAX, MUST or MAY) and Ref
-	// the name or OID it gives.
+	// term (SUP, EQUALITY, ORDERING, SUBSTR, SYNTAX, MUST, MAY, AUX, NOT, OC
+	// or FORM) and Ref the name or OID it gives -- or, for the SUP of a DIT
+	// structure rule, the rule ID. Field is "" for a DIT content rule whose
+	// OID is no object class, and Ref is that OID.
 	UnknownReference BuildErrorKind = iota + 1
-	// DuplicateOID: the OID is defined twice for one element. The
-	// BuildError is about the second definition; Ref, RefOID and RefPos are
-	// the first.
+	// DuplicateOID: the OID is defined twice for one element -- for a DIT
+	// content rule, two rules for one class (X.501 13.8.1: "at most one DIT
+	// content rule for each structural object class"); for a DIT structure
+	// rule, the rule ID twice (X.501 13.7.5: "unique within the scope of the
+	// subschema"). The BuildError is about the second definition; Ref,
+	// RefOID and RefPos are the first.
 	DuplicateOID
 	// DuplicateName: one NAME is given to two definitions of one element
 	// (RFC 4512 1.4: an ambiguous descriptor). The BuildError is about the
@@ -84,8 +102,12 @@ const (
 	// class its own superclass, through SUP. Field is SUP.
 	SuperiorCycle
 	// KindViolation: an object class derives from a class of a kind it may
-	// not (RFC 4512 2.4.1-2.4.3). Field is SUP; Ref, RefOID and RefPos are
-	// the superclass.
+	// not (RFC 4512 2.4.1-2.4.3), and Field is SUP; or a rule names a class
+	// of the wrong kind: a DIT content rule for a class that is not
+	// structural (Field "", RFC 4512 4.1.6) or with a class in AUX that is
+	// not auxiliary (Field AUX), a name form for a class that is not
+	// structural (Field OC, X.501 13.7.2: "Only structural object classes
+	// are used in name forms"). Ref, RefOID and RefPos are the class.
 	KindViolation
 	// UsageMismatch: an attribute type's usage is not its supertype's (RFC
 	// 4512 2.5.1). Field is SUP; Ref, RefOID and RefPos are the supertype.
@@ -98,6 +120,22 @@ const (
 	// NO-USER-MODIFICATION with it (RFC 4512 4.1.2). Field is COLLECTIVE or
 	// NO-USER-MODIFICATION.
 	UsageViolation
+	// DuplicateMember: a rule lists one attribute type twice: in one of the
+	// MUST, MAY and NOT of a DIT content rule or in two of them (slapd
+	// refuses it, servers/slapd/cr.c, SLAP_SCHERR_CR_BAD_AT), or in the MUST
+	// and MAY of a name form (RFC 4512 4.1.7.2: "All attribute types in the
+	// required ("MUST") and allowed ("MAY") lists shall be different") -- or
+	// one class twice in AUX, or one rule ID twice in SUP. Field is the
+	// second list, Ref the name as it is written there; RefOID and RefPos
+	// are the type's or class's.
+	DuplicateMember
+	// PrecludedRequired: a DIT content rule's NOT names a type that its MUST,
+	// its structural class or one of its AUX classes requires (RFC 4512
+	// 4.1.6: "The list of precluded attributes cannot include any attribute
+	// listed as mandatory in the rule, the structural object class, or any
+	// of the allowed auxiliary object classes"). Field is NOT; Ref, RefOID
+	// and RefPos are the type.
+	PrecludedRequired
 )
 
 func (k BuildErrorKind) String() string {
@@ -118,6 +156,10 @@ func (k BuildErrorKind) String() string {
 		return "collective mismatch"
 	case UsageViolation:
 		return "usage violation"
+	case DuplicateMember:
+		return "duplicate member"
+	case PrecludedRequired:
+		return "precluded required"
 	}
 	return fmt.Sprintf("BuildErrorKind(%d)", uint8(k))
 }
@@ -181,6 +223,19 @@ func (x *AttributeType) identity() (Element, string, []string, Position) {
 
 func (x *ObjectClass) identity() (Element, string, []string, Position) {
 	return ElementObjectClass, x.OID, x.Names, x.Pos
+}
+
+func (x *DITContentRule) identity() (Element, string, []string, Position) {
+	return ElementDITContentRule, x.OID, x.Names, x.Pos
+}
+
+func (x *NameForm) identity() (Element, string, []string, Position) {
+	return ElementNameForm, x.OID, x.Names, x.Pos
+}
+
+// The OID of a DIT structure rule, in a BuildError, is its rule ID.
+func (x *DITStructureRule) identity() (Element, string, []string, Position) {
+	return ElementDITStructureRule, strconv.Itoa(x.ID), x.Names, x.Pos
 }
 
 // buildError is the error about x, with the message as Build has always

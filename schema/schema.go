@@ -4,6 +4,7 @@ package schema
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -20,6 +21,11 @@ type Schema struct {
 	types    []*AttributeType
 	classes  []*ObjectClass
 	uses     []*MatchingRuleUse
+	// The DIT content rules, name forms and DIT structure rules (RFC 4512
+	// 4.1.6, 4.1.7), in the order they were defined.
+	contentRules   []*DITContentRule
+	nameForms      []*NameForm
+	structureRules []*DITStructureRule
 
 	syntaxByOID map[string]*Syntax
 	ruleBy      map[string]*MatchingRule
@@ -31,6 +37,21 @@ type Schema struct {
 	// oidOf resolves a descriptor of any kind to its OID, for
 	// objectIdentifierMatch, or to "" when it names two different OIDs.
 	oidOf map[string]string
+
+	contentRuleBy   map[string]*DITContentRule // by OID and lower-case name
+	nameFormBy      map[string]*NameForm
+	structureRuleBy map[int]*DITStructureRule
+	// structureRuleNamed finds a structure rule by a lower-case name: rule
+	// names are descriptors, but of no OID.
+	structureRuleNamed map[string]*DITStructureRule
+	// contentRuleOf, nameFormsOf and structureRulesOf are what applies to
+	// an entry of a structural class, active or not.
+	contentRuleOf    map[*ObjectClass]*DITContentRule
+	nameFormsOf      map[*ObjectClass][]*NameForm
+	structureRulesOf map[*ObjectClass][]*DITStructureRule
+	// activeStructureRules is how many structure rules are not OBSOLETE.
+	// With none, the schema places no entry anywhere in particular.
+	activeStructureRules int
 }
 
 // Build reads the files, in order, into one Schema, and checks that every
@@ -73,15 +94,37 @@ func BuildFrom(defs ...*Definitions) (*Schema, error) {
 			c.sup, c.must, c.may = nil, nil, nil
 			d.ObjectClasses = append(d.ObjectClasses, &c)
 		}
+		for _, e := range x.DITContentRules {
+			c := *e
+			c.class, c.aux, c.must, c.may, c.not = nil, nil, nil, nil, nil
+			d.DITContentRules = append(d.DITContentRules, &c)
+		}
+		for _, e := range x.NameForms {
+			c := *e
+			c.class, c.must, c.may = nil, nil, nil
+			d.NameForms = append(d.NameForms, &c)
+		}
+		for _, e := range x.DITStructureRules {
+			c := *e
+			c.form, c.sup = nil, nil
+			d.DITStructureRules = append(d.DITStructureRules, &c)
+		}
 	}
 	s := &Schema{
-		syntaxByOID: map[string]*Syntax{},
-		ruleBy:      map[string]*MatchingRule{},
-		typeBy:      map[string]*AttributeType{},
-		classBy:     map[string]*ObjectClass{},
-		useBy:       map[string]*MatchingRuleUse{},
-		appliesTo:   map[string]map[*AttributeType]bool{},
-		oidOf:       map[string]string{},
+		syntaxByOID:        map[string]*Syntax{},
+		ruleBy:             map[string]*MatchingRule{},
+		typeBy:             map[string]*AttributeType{},
+		classBy:            map[string]*ObjectClass{},
+		useBy:              map[string]*MatchingRuleUse{},
+		appliesTo:          map[string]map[*AttributeType]bool{},
+		oidOf:              map[string]string{},
+		contentRuleBy:      map[string]*DITContentRule{},
+		nameFormBy:         map[string]*NameForm{},
+		structureRuleBy:    map[int]*DITStructureRule{},
+		structureRuleNamed: map[string]*DITStructureRule{},
+		contentRuleOf:      map[*ObjectClass]*DITContentRule{},
+		nameFormsOf:        map[*ObjectClass][]*NameForm{},
+		structureRulesOf:   map[*ObjectClass][]*DITStructureRule{},
 	}
 	for _, x := range d.Syntaxes {
 		if first := s.syntaxByOID[x.OID]; first != nil {
@@ -123,8 +166,183 @@ func BuildFrom(defs ...*Definitions) (*Schema, error) {
 			return nil, err
 		}
 	}
+	if err := s.linkRules(d); err != nil {
+		return nil, err
+	}
 	s.deriveUses()
 	return s, nil
+}
+
+// linkRules indexes and links the DIT content rules, name forms and DIT
+// structure rules, after the classes and types they name.
+func (s *Schema) linkRules(d *Definitions) error {
+	for _, x := range d.DITContentRules {
+		if err := index(s, s.contentRuleBy, x, x.OID, x.Names, "DIT content rule"); err != nil {
+			return err
+		}
+		s.contentRules = append(s.contentRules, x)
+	}
+	for _, x := range d.NameForms {
+		if err := index(s, s.nameFormBy, x, x.OID, x.Names, "name form"); err != nil {
+			return err
+		}
+		s.nameForms = append(s.nameForms, x)
+	}
+	for _, x := range d.DITStructureRules {
+		if first := s.structureRuleBy[x.ID]; first != nil {
+			return buildError(DuplicateOID, x, "", first.Name(), first, "the DIT structure rule %d is defined twice (X.501 13.7.5: a rule ID is unique in a subschema)", x.ID)
+		}
+		s.structureRuleBy[x.ID] = x
+		for _, n := range x.Names {
+			k := strings.ToLower(n)
+			if first := s.structureRuleNamed[k]; first != nil {
+				return buildError(DuplicateName, x, "NAME", n, first, "the name %q is given to two DIT structure rules", n)
+			}
+			s.structureRuleNamed[k] = x
+		}
+		s.structureRules = append(s.structureRules, x)
+	}
+	for _, r := range s.contentRules {
+		if err := s.linkContentRule(r); err != nil {
+			return err
+		}
+		s.contentRuleOf[r.class] = r
+	}
+	for _, f := range s.nameForms {
+		if err := s.linkNameForm(f); err != nil {
+			return err
+		}
+		s.nameFormsOf[f.class] = append(s.nameFormsOf[f.class], f)
+	}
+	for _, r := range s.structureRules {
+		if err := s.linkStructureRule(r); err != nil {
+			return err
+		}
+		s.structureRulesOf[r.form.class] = append(s.structureRulesOf[r.form.class], r)
+		if !r.Obsolete {
+			s.activeStructureRules++
+		}
+	}
+	return nil
+}
+
+// ruleTypes resolves a list of attribute types of a rule, refusing a type
+// named twice in the rule: members holds the types of the rule's lists
+// read so far.
+func (s *Schema) ruleTypes(x interface {
+	definition
+	Name() string
+}, what, field string, names []string, members map[*AttributeType]bool) ([]*AttributeType, error) {
+	out := make([]*AttributeType, 0, len(names))
+	for _, name := range names {
+		t := s.typeBy[strings.ToLower(name)]
+		if t == nil {
+			return nil, buildError(UnknownReference, x, field, name, nil, "the %s %s has %s %s, which is not a defined attribute type", what, x.Name(), field, name)
+		}
+		if members[t] {
+			return nil, buildError(DuplicateMember, x, field, name, t, "the %s %s lists the attribute type %s twice", what, x.Name(), t.Name())
+		}
+		members[t] = true
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+func (s *Schema) linkContentRule(r *DITContentRule) error {
+	c := s.classBy[r.OID]
+	if c == nil {
+		return buildError(UnknownReference, r, "", r.OID, nil, "the DIT content rule %s is for the object class %s, which is not defined", r.Name(), r.OID)
+	}
+	if c.Kind != Structural {
+		return buildError(KindViolation, r, "", c.Name(), c, "the DIT content rule %s is for the %s class %s, and a content rule is for a structural class (RFC 4512 4.1.6)", r.Name(), strings.ToLower(c.Kind.String()), c.Name())
+	}
+	r.class = c
+	r.aux = make([]*ObjectClass, 0, len(r.Aux))
+	seen := map[*ObjectClass]bool{}
+	for _, name := range r.Aux {
+		a := s.classBy[strings.ToLower(name)]
+		switch {
+		case a == nil:
+			return buildError(UnknownReference, r, "AUX", name, nil, "the DIT content rule %s has AUX %s, which is not a defined object class", r.Name(), name)
+		case a.Kind != Auxiliary:
+			return buildError(KindViolation, r, "AUX", a.Name(), a, "the DIT content rule %s has AUX %s, which is %s, not auxiliary (RFC 4512 4.1.6)", r.Name(), a.Name(), strings.ToLower(a.Kind.String()))
+		case seen[a]:
+			return buildError(DuplicateMember, r, "AUX", name, a, "the DIT content rule %s lists the class %s twice", r.Name(), a.Name())
+		}
+		seen[a] = true
+		r.aux = append(r.aux, a)
+	}
+	// slapd refuses a type listed twice in a rule, in one list or in two
+	// (servers/slapd/cr.c, cr_create_required and the two after it).
+	members := map[*AttributeType]bool{}
+	var err error
+	if r.must, err = s.ruleTypes(r, "DIT content rule", "MUST", r.Must, members); err != nil {
+		return err
+	}
+	if r.may, err = s.ruleTypes(r, "DIT content rule", "MAY", r.May, members); err != nil {
+		return err
+	}
+	if r.not, err = s.ruleTypes(r, "DIT content rule", "NOT", r.Not, members); err != nil {
+		return err
+	}
+	// RFC 4512 4.1.6, and X.501 13.8.1: "Mandatory attributes associated
+	// with the structural or indicated auxiliary object classes shall not
+	// be precluded in a DIT content rule." slapd does not check it (the
+	// FIXME in cr_create_precluded). One set, so that a long AUX and a long
+	// NOT cost their sum and not their product.
+	required := map[*AttributeType]*ObjectClass{}
+	for _, t := range c.must {
+		required[t] = c
+	}
+	for _, a := range r.aux {
+		for _, t := range a.must {
+			required[t] = a
+		}
+	}
+	for _, t := range r.not {
+		if by, ok := required[t]; ok {
+			return buildError(PrecludedRequired, r, "NOT", t.Name(), t, "the DIT content rule %s precludes %s, which the class %s requires (RFC 4512 4.1.6)", r.Name(), t.Name(), by.Name())
+		}
+	}
+	return nil
+}
+
+func (s *Schema) linkNameForm(f *NameForm) error {
+	c := s.classBy[strings.ToLower(f.OC)]
+	if c == nil {
+		return buildError(UnknownReference, f, "OC", f.OC, nil, "the name form %s has OC %s, which is not a defined object class", f.Name(), f.OC)
+	}
+	if c.Kind != Structural {
+		return buildError(KindViolation, f, "OC", c.Name(), c, "the name form %s names the %s class %s, and a name form names a structural class (X.501 13.7.2)", f.Name(), strings.ToLower(c.Kind.String()), c.Name())
+	}
+	f.class = c
+	members := map[*AttributeType]bool{}
+	var err error
+	if f.must, err = s.ruleTypes(f, "name form", "MUST", f.Must, members); err != nil {
+		return err
+	}
+	f.may, err = s.ruleTypes(f, "name form", "MAY", f.May, members)
+	return err
+}
+
+func (s *Schema) linkStructureRule(r *DITStructureRule) error {
+	f := s.nameFormBy[strings.ToLower(r.Form)]
+	if f == nil {
+		return buildError(UnknownReference, r, "FORM", r.Form, nil, "the DIT structure rule %s has FORM %s, which is not a defined name form", r.Name(), r.Form)
+	}
+	r.form = f
+	r.sup = make(map[int]bool, len(r.Sup))
+	for _, id := range r.Sup {
+		sup := s.structureRuleBy[id]
+		if sup == nil {
+			return buildError(UnknownReference, r, "SUP", strconv.Itoa(id), nil, "the DIT structure rule %s has the superior rule %d, which is not defined", r.Name(), id)
+		}
+		if r.sup[id] {
+			return buildError(DuplicateMember, r, "SUP", strconv.Itoa(id), sup, "the DIT structure rule %s lists the superior rule %d twice", r.Name(), id)
+		}
+		r.sup[id] = true
+	}
+	return nil
 }
 
 // index files an element under its OID and each of its names, refusing an
@@ -373,6 +591,27 @@ func (s *Schema) MatchingRules() []*MatchingRule       { return slices.Clone(s.r
 func (s *Schema) AttributeTypes() []*AttributeType     { return slices.Clone(s.types) }
 func (s *Schema) ObjectClasses() []*ObjectClass        { return slices.Clone(s.classes) }
 func (s *Schema) MatchingRuleUses() []*MatchingRuleUse { return slices.Clone(s.uses) }
+
+// DITContentRules, NameForms and DITStructureRules list the rules, in the
+// order they were defined.
+func (s *Schema) DITContentRules() []*DITContentRule     { return slices.Clone(s.contentRules) }
+func (s *Schema) NameForms() []*NameForm                 { return slices.Clone(s.nameForms) }
+func (s *Schema) DITStructureRules() []*DITStructureRule { return slices.Clone(s.structureRules) }
+
+// DITContentRule finds a content rule by its OID -- its class's -- or one
+// of its names, or returns nil.
+func (s *Schema) DITContentRule(name string) *DITContentRule {
+	return s.contentRuleBy[strings.ToLower(name)]
+}
+
+// DITContentRuleOf is the content rule for a class, active or not, or nil.
+func (s *Schema) DITContentRuleOf(c *ObjectClass) *DITContentRule { return s.contentRuleOf[c] }
+
+// NameForm finds a name form by its OID or one of its names, or returns nil.
+func (s *Schema) NameForm(name string) *NameForm { return s.nameFormBy[strings.ToLower(name)] }
+
+// DITStructureRule finds a structure rule by its rule ID, or returns nil.
+func (s *Schema) DITStructureRule(id int) *DITStructureRule { return s.structureRuleBy[id] }
 
 // resolveOID is objectIdentifierMatch's reading of a value (RFC 4517
 // 4.2.26): a numeric OID as itself, a descriptor as the OID it names. The

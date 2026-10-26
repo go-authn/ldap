@@ -16,6 +16,8 @@
 // every machine that read it.
 package schema
 
+import "strconv"
+
 // A Kind is what an object class is for (RFC 4512 2.4).
 type Kind uint8
 
@@ -159,6 +161,118 @@ type ObjectClass struct {
 	sup       []*ObjectClass
 	must, may []*AttributeType
 }
+
+// A DITContentRule is a DIT content rule description (RFC 4512 4.1.6): what
+// entries of ONE structural object class may hold beyond what their classes
+// say. Its OID is the structural class's (RFC 4512 4.1.6: "Each content rule
+// is identified by the object identifier ... of the structural object class
+// it applies to").
+//
+// Aux are the auxiliary classes such an entry may belong to; Must and May
+// add required and allowed attribute types; Not precludes types its classes
+// would allow. An OBSOLETE rule is not active (RFC 4512 4.1), and an entry
+// is then governed as if there were none (RFC 4512 4.1.6: "If no active
+// rule is present ...").
+type DITContentRule struct {
+	OID        string
+	Names      []string
+	Desc       string
+	Obsolete   bool
+	Aux        []string
+	Must       []string
+	May        []string
+	Not        []string
+	Extensions []Extension
+	// Pos is where the definition was read from, if it was.
+	Pos Position
+
+	// Resolved by Build.
+	class          *ObjectClass
+	aux            []*ObjectClass
+	must, may, not []*AttributeType
+}
+
+// A NameForm is a name form description (RFC 4512 4.1.7.2): the attribute
+// types the RDN of an entry of one structural class is made of. Every type
+// of Must is in the RDN, and nothing that is in neither Must nor May.
+type NameForm struct {
+	OID        string
+	Names      []string
+	Desc       string
+	Obsolete   bool
+	OC         string
+	Must       []string
+	May        []string
+	Extensions []Extension
+	// Pos is where the definition was read from, if it was.
+	Pos Position
+
+	// Resolved by Build.
+	class     *ObjectClass
+	must, may []*AttributeType
+}
+
+// MaxRuleID is the largest rule identifier a DIT structure rule may have.
+// RFC 4512 4.1.7.1's ruleid is a number, and X.501 13.7.6's RuleIdentifier
+// an INTEGER, neither bounded; this one fits an int on every architecture
+// Go has, 32-bit ones included, so that no rule reads as another.
+const MaxRuleID = 1<<31 - 1
+
+// A DITStructureRule is a DIT structure rule description (RFC 4512
+// 4.1.7.1): entries named by the name form Form -- and so of its structural
+// class -- may be placed under entries governed by one of the rules Sup.
+// A rule with no Sup governs a subschema administrative point, the root of
+// the subtree the subschema controls (X.501 13.7.5).
+//
+// A rule is identified by its ID, not by an OID (RFC 4512 4.1.7.1: "ruleid
+// = number"). A rule may name itself in Sup: organizationalUnits under
+// organizationalUnits is one rule.
+type DITStructureRule struct {
+	ID         int
+	Names      []string
+	Desc       string
+	Obsolete   bool
+	Form       string
+	Sup        []int
+	Extensions []Extension
+	// Pos is where the definition was read from, if it was.
+	Pos Position
+
+	// Resolved by Build.
+	form *NameForm
+	sup  map[int]bool
+}
+
+// Name is the first short name, or the OID when there is none.
+func (r *DITContentRule) Name() string { return firstName(r.Names, r.OID) }
+
+// Name is the first short name, or the OID when there is none.
+func (f *NameForm) Name() string { return firstName(f.Names, f.OID) }
+
+// Name is the first short name, or the rule ID when there is none.
+func (r *DITStructureRule) Name() string { return firstName(r.Names, strconv.Itoa(r.ID)) }
+
+// Class is the structural object class the rule governs.
+func (r *DITContentRule) Class() *ObjectClass { return r.class }
+
+// AuxiliaryClasses are the auxiliary classes the rule allows.
+func (r *DITContentRule) AuxiliaryClasses() []*ObjectClass { return r.aux }
+
+// MustTypes, MayTypes and NotTypes are the rule's MUST, MAY and NOT.
+func (r *DITContentRule) MustTypes() []*AttributeType { return r.must }
+func (r *DITContentRule) MayTypes() []*AttributeType  { return r.may }
+func (r *DITContentRule) NotTypes() []*AttributeType  { return r.not }
+
+// Class is the structural object class the name form names.
+func (f *NameForm) Class() *ObjectClass { return f.class }
+
+// MustTypes and MayTypes are the name form's required and allowed naming
+// attribute types.
+func (f *NameForm) MustTypes() []*AttributeType { return f.must }
+func (f *NameForm) MayTypes() []*AttributeType  { return f.may }
+
+// NameForm is the rule's name form.
+func (r *DITStructureRule) NameForm() *NameForm { return r.form }
 
 // Name is the first short name, or the OID when there is none: what a
 // message about this element calls it.
