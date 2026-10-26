@@ -3,6 +3,7 @@
 package schema
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -268,14 +269,24 @@ func (d *Definitions) defineMacro(args string, m *OIDMacros) error {
 
 // isLDIF is the first line that is neither blank nor a comment starting
 // with "name:": no kind of .schema definition has a colon in it.
+//
+// It walks the bytes line by line, as lines would split them, and stops at
+// that first line: it does not copy and split the whole file to read one.
 func isLDIF(data []byte) bool {
-	for _, l := range lines(data) {
-		t := strings.TrimSpace(l)
-		if t == "" || t[0] == '#' || l[0] == ' ' || l[0] == '\t' {
+	for len(data) > 0 {
+		l := data
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			l, data = data[:i], data[i+1:]
+		} else {
+			data = nil
+		}
+		l = bytes.TrimSuffix(l, []byte{'\r'})
+		t := bytes.TrimSpace(l)
+		if len(t) == 0 || t[0] == '#' || l[0] == ' ' || l[0] == '\t' {
 			continue
 		}
-		w, _, _ := strings.Cut(t, " ")
-		return strings.Contains(w, ":")
+		w, _, _ := bytes.Cut(t, []byte{' '})
+		return bytes.IndexByte(w, ':') >= 0
 	}
 	return false
 }

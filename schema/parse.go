@@ -458,7 +458,7 @@ func (p *parser) definition(allowed *grammar, read func(t term, keyword string) 
 	if err != nil {
 		return "", nil, err
 	}
-	next := int8(0)  // the rank of the first term still allowed
+	next := int8(0) // the rank of the first term still allowed
 	var seen uint32 // the terms read, one bit each
 	var exts []Extension
 	for {
