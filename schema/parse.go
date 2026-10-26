@@ -120,19 +120,27 @@ func (p *parser) found() string {
 // word reads up to the next space or parenthesis: a keyword, an oid, or a
 // number. What it read is checked by the caller.
 func (p *parser) word() string {
+	stop := &wordStops[0]
+	if p.openldap {
+		stop = &wordStops[1]
+	}
 	start := p.pos
-	for p.pos < len(p.s) {
-		switch p.s[p.pos] {
-		case '(', ')', '\'', '$', '{', '}':
-			return p.s[start:p.pos]
-		}
-		if p.isSpace(p.s[p.pos]) {
-			return p.s[start:p.pos]
-		}
+	for p.pos < len(p.s) && !stop[p.s[p.pos]] {
 		p.pos++
 	}
 	return p.s[start:p.pos]
 }
+
+// wordStops are the bytes that end a word: a parenthesis, a quote, a
+// dollar, a brace, or a space -- isSpace's, in RFC 4512 ([0]) and in an
+// OpenLDAP file ([1]). One table lookup per byte, not a switch and a call.
+var wordStops = func() (t [2][256]bool) {
+	for _, c := range "()'${} " {
+		t[0][c], t[1][c] = true, true
+	}
+	t[1]['\t'], t[1]['\n'] = true, true
+	return t
+}()
 
 func (p *parser) numericoid() (string, error) {
 	q := p.openQuote()
@@ -174,6 +182,22 @@ func (p *parser) bareOID() (string, error) {
 	return w, nil
 }
 
+// listBuf is the stack room a list is gathered in before it is copied out
+// at its exact length: one allocation per list, not one per growth. Eight
+// holds every list in the embedded schemas but a handful of MAY lists.
+const listBuf = 8
+
+// exact copies a gathered list to the heap at its length; an empty list
+// stays nil, as an append to a nil slice left it before.
+func exact(s []string) []string {
+	if len(s) == 0 {
+		return nil
+	}
+	out := make([]string, len(s))
+	copy(out, s)
+	return out
+}
+
 // oids = oid / ( LPAREN WSP oidlist WSP RPAREN )
 // oidlist = oid *( WSP DOLLAR WSP oid )
 func (p *parser) oids() ([]string, error) {
@@ -186,7 +210,8 @@ func (p *parser) oids() ([]string, error) {
 	}
 	p.pos++
 	p.spaces()
-	var out []string
+	var buf [listBuf]string
+	out := buf[:0]
 	for {
 		o, err := p.oid()
 		if err != nil {
@@ -196,7 +221,7 @@ func (p *parser) oids() ([]string, error) {
 		p.spaces()
 		if p.peek() == ')' {
 			p.pos++
-			return out, nil
+			return exact(out), nil
 		}
 		if err := p.expect('$'); err != nil {
 			return nil, err
@@ -217,7 +242,8 @@ func (p *parser) qdescrs() ([]string, error) {
 	}
 	p.pos++
 	p.spaces()
-	var out []string
+	var buf [listBuf]string
+	out := buf[:0]
 	for p.peek() != ')' {
 		if len(out) > 0 && !p.isSpace(p.s[p.pos-1]) {
 			return nil, p.fail("expected a space between two names")
@@ -230,7 +256,7 @@ func (p *parser) qdescrs() ([]string, error) {
 		p.spaces()
 	}
 	p.pos++
-	return out, nil
+	return exact(out), nil
 }
 
 // qdescr = SQUOTE descr SQUOTE
@@ -256,7 +282,40 @@ func (p *parser) qdstring() (string, error) {
 	if err := p.expect('\''); err != nil {
 		return "", err
 	}
+	// The common case has no escape, and its value is the input between
+	// the quotes: a slice of it, copied nowhere. At the first backslash the
+	// string is rebuilt from there on.
+	start := p.pos
+	for p.pos < len(p.s) {
+		c := p.s[p.pos]
+		switch {
+		case c == '\'':
+			if p.pos == start {
+				return "", p.fail("a quoted string may not be empty (RFC 4512 4.1: dstring = 1*...)")
+			}
+			p.pos++
+			return p.s[start : p.pos-1], nil
+		case c == '\\':
+			return p.qdstringEscaped(start)
+		case c < utf8.RuneSelf:
+			p.pos++
+		default:
+			r, n := utf8.DecodeRuneInString(p.s[p.pos:])
+			if r == utf8.RuneError && n <= 1 {
+				return "", p.fail("the quoted string is not UTF-8")
+			}
+			p.pos += n
+		}
+	}
+	return "", p.fail("the quoted string is not closed")
+}
+
+// qdstringEscaped goes on with a qdstring from its first backslash, at
+// p.pos; what came before it, from start, had nothing to unescape.
+func (p *parser) qdstringEscaped(start int) (string, error) {
 	var b strings.Builder
+	b.Grow(p.pos - start + 16)
+	b.WriteString(p.s[start:p.pos])
 	for {
 		if p.pos >= len(p.s) {
 			return "", p.fail("the quoted string is not closed")
@@ -264,9 +323,7 @@ func (p *parser) qdstring() (string, error) {
 		c := p.s[p.pos]
 		switch {
 		case c == '\'':
-			if b.Len() == 0 {
-				return "", p.fail("a quoted string may not be empty (RFC 4512 4.1: dstring = 1*...)")
-			}
+			// Not empty: the escape this began at wrote a byte, or failed.
 			p.pos++
 			return b.String(), nil
 		case c == '\\':
@@ -302,7 +359,8 @@ func (p *parser) qdstrings() ([]string, error) {
 	}
 	p.pos++
 	p.spaces()
-	var out []string
+	var buf [listBuf]string
+	out := buf[:0]
 	for p.peek() != ')' {
 		if len(out) > 0 && !p.isSpace(p.s[p.pos-1]) {
 			return nil, p.fail("expected a space between two strings")
@@ -315,7 +373,7 @@ func (p *parser) qdstrings() ([]string, error) {
 		p.spaces()
 	}
 	p.pos++
-	return out, nil
+	return exact(out), nil
 }
 
 // noidlen = numericoid [ LCURLY len RCURLY ]
@@ -363,18 +421,75 @@ const (
 	tApplies
 )
 
-var termWords = map[string]term{
-	"NAME": tName, "DESC": tDesc, "OBSOLETE": tObsolete, "SUP": tSup,
-	"EQUALITY": tEquality, "ORDERING": tOrdering, "SUBSTR": tSubstr,
-	"SYNTAX": tSyntax, "SINGLE-VALUE": tSingleValue, "COLLECTIVE": tCollective,
-	"NO-USER-MODIFICATION": tNoUserMod, "USAGE": tUsage,
-	"ABSTRACT": tKind, "STRUCTURAL": tKind, "AUXILIARY": tKind,
-	"MUST": tMust, "MAY": tMay, "APPLIES": tApplies,
+// A grammar is the terms a kind of definition allows: grammar[t] is t's
+// rank in the order the ABNF gives them, or -1 when t is not allowed. It
+// is built once per kind, not per definition read.
+type grammar [tApplies + 1]int8
+
+func newGrammar(terms ...term) *grammar {
+	g := new(grammar)
+	for i := range g {
+		g[i] = -1
+	}
+	for i, t := range terms {
+		g[t] = int8(i)
+	}
+	return g
+}
+
+var (
+	syntaxTerms          = newGrammar(tDesc)
+	matchingRuleTerms    = newGrammar(tName, tDesc, tObsolete, tSyntax)
+	matchingRuleUseTerms = newGrammar(tName, tDesc, tObsolete, tApplies)
+	attributeTypeTerms   = newGrammar(tName, tDesc, tObsolete, tSup, tEquality, tOrdering, tSubstr,
+		tSyntax, tSingleValue, tCollective, tNoUserMod, tUsage)
+	objectClassTerms = newGrammar(tName, tDesc, tObsolete, tSup, tKind, tMust, tMay)
+)
+
+// termWord is the term a keyword, in capitals, names. A switch, which the
+// compiler turns into comparisons by length and content, and no map: the
+// keyword is not hashed.
+func termWord(up string) (term, bool) {
+	switch up {
+	case "NAME":
+		return tName, true
+	case "DESC":
+		return tDesc, true
+	case "OBSOLETE":
+		return tObsolete, true
+	case "SUP":
+		return tSup, true
+	case "EQUALITY":
+		return tEquality, true
+	case "ORDERING":
+		return tOrdering, true
+	case "SUBSTR":
+		return tSubstr, true
+	case "SYNTAX":
+		return tSyntax, true
+	case "SINGLE-VALUE":
+		return tSingleValue, true
+	case "COLLECTIVE":
+		return tCollective, true
+	case "NO-USER-MODIFICATION":
+		return tNoUserMod, true
+	case "USAGE":
+		return tUsage, true
+	case "ABSTRACT", "STRUCTURAL", "AUXILIARY":
+		return tKind, true
+	case "MUST":
+		return tMust, true
+	case "MAY":
+		return tMay, true
+	case "APPLIES":
+		return tApplies, true
+	}
+	return 0, false
 }
 
 // definition reads LPAREN WSP numericoid, then each `SP term` in the order
 // allowed, then extensions WSP RPAREN, calling each term's reader.
-func (p *parser) definition(allowed []term, read func(t term, keyword string) error) (string, []Extension, error) {
+func (p *parser) definition(allowed *grammar, read func(t term, keyword string) error) (string, []Extension, error) {
 	if err := p.expect('('); err != nil {
 		return "", nil, err
 	}
@@ -383,12 +498,8 @@ func (p *parser) definition(allowed []term, read func(t term, keyword string) er
 	if err != nil {
 		return "", nil, err
 	}
-	rank := make(map[term]int, len(allowed))
-	for i, t := range allowed {
-		rank[t] = i
-	}
-	next := 0 // the first term still allowed
-	seen := map[term]bool{}
+	next := int8(0) // the rank of the first term still allowed
+	var seen uint32 // the terms read, one bit each
 	var exts []Extension
 	for {
 		n := p.spaces()
@@ -419,9 +530,9 @@ func (p *parser) definition(allowed []term, read func(t term, keyword string) er
 			exts = append(exts, Extension{Name: kw, Values: vals})
 			continue
 		}
-		t, known := termWords[up]
-		r, ok := rank[t]
-		if !known || !ok {
+		t, known := termWord(up)
+		r := allowed[t]
+		if !known || r < 0 {
 			p.pos = start
 			if kw == "" {
 				return "", nil, p.fail("expected a keyword, found %s", p.found())
@@ -433,11 +544,11 @@ func (p *parser) definition(allowed []term, read func(t term, keyword string) er
 			// libldap, ldap_str2attributetype and the others: "Beyond this
 			// point we will be liberal and accept the items in any order",
 			// and a term seen twice is LDAP_SCHERR_DUPOPT.
-			if seen[t] {
+			if seen&(1<<t) != 0 {
 				p.pos = start
 				return "", nil, p.fail("%s is repeated", up)
 			}
-			seen[t] = true
+			seen |= 1 << t
 		case exts != nil:
 			p.pos = start
 			return "", nil, p.fail("%s after an extension: extensions come last (RFC 4512 4.1)", up)
@@ -460,7 +571,7 @@ func ParseSyntax(s string) (*Syntax, error) { return parseSyntax(&parser{s: s}) 
 
 func parseSyntax(p *parser) (*Syntax, error) {
 	out := &Syntax{}
-	oid, exts, err := p.definition([]term{tDesc}, func(_ term, _ string) (err error) {
+	oid, exts, err := p.definition(syntaxTerms, func(_ term, _ string) (err error) {
 		if err = p.arg(); err == nil {
 			out.Desc, err = p.qdstring()
 		}
@@ -495,7 +606,7 @@ func ParseMatchingRule(s string) (*MatchingRule, error) { return parseMatchingRu
 
 func parseMatchingRule(p *parser) (*MatchingRule, error) {
 	out := &MatchingRule{}
-	oid, exts, err := p.definition([]term{tName, tDesc, tObsolete, tSyntax}, func(t term, _ string) (err error) {
+	oid, exts, err := p.definition(matchingRuleTerms, func(t term, _ string) (err error) {
 		if t != tSyntax {
 			return p.common(t, &out.Names, &out.Desc, &out.Obsolete)
 		}
@@ -518,7 +629,7 @@ func parseMatchingRule(p *parser) (*MatchingRule, error) {
 func ParseMatchingRuleUse(s string) (*MatchingRuleUse, error) {
 	p := &parser{s: s}
 	out := &MatchingRuleUse{}
-	oid, exts, err := p.definition([]term{tName, tDesc, tObsolete, tApplies}, func(t term, _ string) (err error) {
+	oid, exts, err := p.definition(matchingRuleUseTerms, func(t term, _ string) (err error) {
 		if t != tApplies {
 			return p.common(t, &out.Names, &out.Desc, &out.Obsolete)
 		}
@@ -549,9 +660,7 @@ func ParseAttributeType(s string) (*AttributeType, error) {
 
 func parseAttributeType(p *parser) (*AttributeType, error) {
 	out := &AttributeType{}
-	order := []term{tName, tDesc, tObsolete, tSup, tEquality, tOrdering, tSubstr,
-		tSyntax, tSingleValue, tCollective, tNoUserMod, tUsage}
-	oid, exts, err := p.definition(order, func(t term, _ string) (err error) {
+	oid, exts, err := p.definition(attributeTypeTerms, func(t term, _ string) (err error) {
 		switch t {
 		case tSup, tEquality, tOrdering, tSubstr:
 			if err = p.arg(); err != nil {
@@ -559,8 +668,16 @@ func parseAttributeType(p *parser) (*AttributeType, error) {
 			}
 			var o string
 			if o, err = p.oid(); err == nil {
-				*map[term]*string{tSup: &out.Sup, tEquality: &out.Equality,
-					tOrdering: &out.Ordering, tSubstr: &out.Substr}[t] = o
+				switch t {
+				case tSup:
+					out.Sup = o
+				case tEquality:
+					out.Equality = o
+				case tOrdering:
+					out.Ordering = o
+				default:
+					out.Substr = o
+				}
 			}
 		case tSyntax:
 			if err = p.arg(); err == nil {
@@ -606,15 +723,22 @@ func ParseObjectClass(s string) (*ObjectClass, error) { return parseObjectClass(
 
 func parseObjectClass(p *parser) (*ObjectClass, error) {
 	out := &ObjectClass{}
-	order := []term{tName, tDesc, tObsolete, tSup, tKind, tMust, tMay}
-	oid, exts, err := p.definition(order, func(t term, kw string) (err error) {
+	oid, exts, err := p.definition(objectClassTerms, func(t term, kw string) (err error) {
 		switch t {
 		case tSup:
 			if err = p.arg(); err == nil {
 				out.Sup, err = p.oids()
 			}
 		case tKind:
-			out.Kind = map[string]Kind{"ABSTRACT": Abstract, "STRUCTURAL": Structural, "AUXILIARY": Auxiliary}[kw]
+			// kw is one of the three: termWord maps nothing else to tKind.
+			switch kw {
+			case "ABSTRACT":
+				out.Kind = Abstract
+			case "STRUCTURAL":
+				out.Kind = Structural
+			default:
+				out.Kind = Auxiliary
+			}
 		case tMust:
 			if err = p.arg(); err == nil {
 				out.Must, err = p.oids()
@@ -638,17 +762,22 @@ func parseObjectClass(p *parser) (*ObjectClass, error) {
 // --- RFC 4512 1.4 ---------------------------------------------------------
 
 // isNumericOID is numericoid = number 1*( DOT number ).
+// It scans s once, number by number, without splitting it.
 func isNumericOID(s string) bool {
-	parts := strings.Split(s, ".")
-	if len(parts) < 2 {
-		return false
-	}
-	for _, n := range parts {
-		if !isNumber(n) {
+	dots, start := 0, 0
+	for i := 0; i <= len(s); i++ {
+		if i < len(s) && s[i] != '.' {
+			continue
+		}
+		if !isNumber(s[start:i]) {
 			return false
 		}
+		if i < len(s) {
+			dots++
+		}
+		start = i + 1
 	}
-	return true
+	return dots > 0
 }
 
 // isNumber is number = DIGIT / ( LDIGIT 1*DIGIT ): no leading zero.

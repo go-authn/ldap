@@ -3,6 +3,7 @@
 package schema
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -150,6 +151,11 @@ func (d *Definitions) readSchema(f File, m *OIDMacros) error {
 			return &FileError{f.Name, i + 1, 0, fmt.Errorf("the line is %d bytes, more than the %d slapd.conf(5) allows", len(l), MaxLineLength)}
 		}
 	}
+	// ⛔ The lines of a definition are joined in buf, which is reused, and
+	// not by string concatenation: that copied the definition so far at
+	// every line, and a 4 MiB file of short continuation lines took three
+	// minutes to read (TestManyContinuationLinesJoinInLinearTime).
+	var buf []byte
 	for i := 0; i < len(ls); i++ {
 		text, first := ls[i], i+1
 		if text == "" {
@@ -162,21 +168,29 @@ func (d *Definitions) readSchema(f File, m *OIDMacros) error {
 			return &FileError{f.Name, first, 0, errors.New("a continuation line with no definition before it")}
 		}
 		at := spans{{0, first, 1}}
+		buf = append(buf[:0], text...)
+		joined := false
 		for i+1 < len(ls) {
 			next := ls[i+1]
-			if strings.HasSuffix(text, `\`) && !strings.HasSuffix(text, `\\`) {
-				text = text[:len(text)-1]
+			if bytes.HasSuffix(buf, []byte{'\\'}) && !bytes.HasSuffix(buf, []byte{'\\', '\\'}) {
+				buf = buf[:len(buf)-1]
 				i++
-				at = append(at, span{len(text), i + 1, 1})
-				text += next
+				at = append(at, span{len(buf), i + 1, 1})
+				buf = append(buf, next...)
+				joined = true
 				continue
 			}
 			if next == "" || !isBlank(next[0]) {
 				break
 			}
 			i++
-			at = append(at, span{len(text), i + 1, 1})
-			text += " " + next[1:]
+			at = append(at, span{len(buf), i + 1, 1})
+			buf = append(buf, ' ')
+			buf = append(buf, next[1:]...)
+			joined = true
+		}
+		if joined {
+			text = string(buf)
 		}
 		// A lone backslash joined to an empty line leaves nothing (found by
 		// FuzzRead: "\\\n" indexed an empty line).
@@ -268,14 +282,24 @@ func (d *Definitions) defineMacro(args string, m *OIDMacros) error {
 
 // isLDIF is the first line that is neither blank nor a comment starting
 // with "name:": no kind of .schema definition has a colon in it.
+//
+// It walks the bytes line by line, as lines would split them, and stops at
+// that first line: it does not copy and split the whole file to read one.
 func isLDIF(data []byte) bool {
-	for _, l := range lines(data) {
-		t := strings.TrimSpace(l)
-		if t == "" || t[0] == '#' || l[0] == ' ' || l[0] == '\t' {
+	for len(data) > 0 {
+		l := data
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			l, data = data[:i], data[i+1:]
+		} else {
+			data = nil
+		}
+		l = bytes.TrimSuffix(l, []byte{'\r'})
+		t := bytes.TrimSpace(l)
+		if len(t) == 0 || t[0] == '#' || l[0] == ' ' || l[0] == '\t' {
 			continue
 		}
-		w, _, _ := strings.Cut(t, " ")
-		return strings.Contains(w, ":")
+		w, _, _ := bytes.Cut(t, []byte{' '})
+		return bytes.IndexByte(w, ':') >= 0
 	}
 	return false
 }
@@ -307,6 +331,7 @@ var unsupported = map[string]bool{
 // definition is refused rather than half-applied.
 func (d *Definitions) readLDIF(f File, m *OIDMacros) error {
 	ls := lines(f.Data)
+	var buf []byte // the folded lines, joined in linear time (see readSchema)
 	for i := 0; i < len(ls); i++ {
 		l := ls[i]
 		if l == "" || l == "-" {
@@ -320,10 +345,14 @@ func (d *Definitions) readLDIF(f File, m *OIDMacros) error {
 		text := l
 		var at spans
 		colon := strings.IndexByte(l, ':')
-		for i+1 < len(ls) && strings.HasPrefix(ls[i+1], " ") {
-			i++
-			at = append(at, span{len(text), i + 1, 2})
-			text += ls[i][1:]
+		if i+1 < len(ls) && strings.HasPrefix(ls[i+1], " ") {
+			buf = append(buf[:0], text...)
+			for i+1 < len(ls) && strings.HasPrefix(ls[i+1], " ") {
+				i++
+				at = append(at, span{len(buf), i + 1, 2})
+				buf = append(buf, ls[i][1:]...)
+			}
+			text = string(buf)
 		}
 		if comment {
 			continue

@@ -239,7 +239,47 @@ func (d *Definitions) Format(macros bool) ([]byte, error) {
 	if bad != nil {
 		return nil, bad
 	}
-	return []byte(b.String()), nil
+	return []byte(foldLong(b.String())), nil
+}
+
+// foldLong cuts every line of s longer than MaxLineLength, which Read
+// refuses as slapd.conf(5) does, into pieces that end with a backslash.
+// slapd's fp_getline (servers/slapd/config.c) joins a line that ends with a
+// backslash not preceded by another to the next one with nothing between
+// them, and so does Read, so the value is unchanged. A name or a string of
+// more than 2000 bytes reads from LDIF, which has no such bound (found by
+// FuzzRead: it formatted to a line that did not read back). A piece never
+// ends with a backslash of its own, which would read as `\\`.
+func foldLong(s string) string {
+	long := false
+	for rest := s; rest != "" && !long; {
+		var line string
+		line, rest, _ = strings.Cut(rest, "\n")
+		long = len(line) > MaxLineLength
+	}
+	if !long {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + len(s)/MaxLineLength*2)
+	for rest := s; rest != ""; {
+		line, after, nl := strings.Cut(rest, "\n")
+		for len(line) > MaxLineLength {
+			k := MaxLineLength - 1 // and the backslash: MaxLineLength
+			for k > 1 && line[k-1] == '\\' {
+				k--
+			}
+			b.WriteString(line[:k])
+			b.WriteString("\\\n")
+			line = line[k:]
+		}
+		b.WriteString(line)
+		if nl {
+			b.WriteByte('\n')
+		}
+		rest = after
+	}
+	return b.String()
 }
 
 type printed interface {
