@@ -390,6 +390,11 @@ func TestDecodeRefuses(t *testing.T) {
 		{`object_class "c" { oid = "1.1" }` + "\n" + `object_class "d" { oid = "1.1" }`, `object_class "1.1" is already defined`, ``},
 		{strings.Repeat("[", MaxNesting+1), `a.hcl:1:65: Nested too deeply`, strings.Repeat("\n", 3)},
 
+		// Found by FuzzDecode: a string that is not UTF-8 decoded, and
+		// encoded to another (cty.StringVal replaces what is not UTF-8).
+		{"ldap_syntax \"0.0\" { desc = \"$00005\xc1\x87\" }", `a.hcl:1:28: Invalid UTF-8: desc is not UTF-8`, `ldap_syntax "0.0" { desc = "$00005é" }`},
+		{blk(`object_class "c"`, `oid = "1.1"`, "extensions = { X-A = [\"\xc1\x87\"] }"), `Invalid UTF-8: X-A holds a string that is not UTF-8`, ``},
+
 		// The rules.
 		{`dit_content_rule "r" {}`, `Missing oid`, `dit_content_rule "r" { oid = "2.5.6.6" }`},
 		{blk(`dit_content_rule "r"`, `oid = "2.5.6.6"`, `aux = ["a b"]`), `a.hcl:3:7: Invalid aux`, blk(`dit_content_rule "r"`, `oid = "2.5.6.6"`, `aux = ["a"]`)},

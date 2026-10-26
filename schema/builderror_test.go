@@ -246,6 +246,8 @@ func FuzzBuildErrorPosition(f *testing.F) {
 		"dn: x\nattributeTypes: ( 1.1 NAME 'a' SY\n NTAX 1.1 )\nldapSyntaxes: ( 1.1 )\nobjectClasses: ( 1.2 NAME 'c' MUST b )\n",
 		"objectclass ( 1.1 NAME 'x' SUP y )\nobjectclass ( 1.2 NAME 'y' SUP x )\n",
 		"ldapsyntax ( 1.1 )\nattributetype ( 1.2 NAME 'a' SYNTAX 1.1 \\\nCOLLECTIVE USAGE dSAOperation )\n",
+		"ldapsyntax ( 1.1 )\nattributetype ( 1.2 NAME 'a' SYNTAX 1.1 )\nobjectclass ( 1.3 NAME 's' MUST a )\nditcontentrule ( 1.3\n NOT a )\n",
+		"nameform ( 1.2 NAME 'f' OC s MUST a )\nditstructurerule ( 1 FORM f )\nditstructurerule ( 1\n FORM f )\n",
 	} {
 		f.Add([]byte(s))
 	}

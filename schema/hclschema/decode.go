@@ -111,6 +111,7 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/go-authn/ldap/schema"
 	"github.com/hashicorp/hcl/v2"
@@ -330,6 +331,10 @@ func (f *fields) str(name string) (string, bool) {
 		f.d.errorf(f.rangeOf(name), "Empty value", "%s may not be empty; leave it out instead", name)
 		return "", false
 	}
+	if !utf8.ValidString(v.AsString()) {
+		f.d.errorf(f.rangeOf(name), "Invalid UTF-8", "%s is not UTF-8 (RFC 4512 4.1: a qdstring is UTF-8)", name)
+		return "", false
+	}
 	return v.AsString(), true
 }
 
@@ -344,6 +349,10 @@ func (d *decoder) strings(v cty.Value, rng hcl.Range, name string) []string {
 		_, e := it.Element()
 		if e.IsNull() || e.Type() != cty.String || e.AsString() == "" {
 			d.errorf(rng, "Incorrect type", "%s must be a list of strings, none of them empty", name)
+			return nil
+		}
+		if !utf8.ValidString(e.AsString()) {
+			d.errorf(rng, "Invalid UTF-8", "%s holds a string that is not UTF-8 (RFC 4512 4.1: a qdstring is UTF-8)", name)
 			return nil
 		}
 		out = append(out, e.AsString())

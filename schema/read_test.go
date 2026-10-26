@@ -277,6 +277,8 @@ func FuzzRead(f *testing.F) {
 		"objectidentifier a 1.2\nattributetype ( a:1 NAME 'x' SYNTAX 1.1{3} X-O 'y' )\nobjectclass ( a:2 NAME 'c' MAY x )\n",
 		"dn: cn=x\nolcAttributeTypes: {0}( 1.1 NAME 'a' DES\n C 'b' SUP c )\n",
 		"ldapsyntax ( 1.2 DESC 'x' )\nmatchingrule ( 1.3 NAME 'm' SYNTAX 1.2 )\n",
+		"objectidentifier e 1.9\nditcontentrule ( e:1 NOT a AUX b )\nnameform ( e:2 MUST a OC c )\nditstructurerule ( 3 SUP ( 1 2 ) FORM e:2 )\n",
+		"dn: x\ndITContentRules: ( 1.1 MUST a )\nnameForms: ( 1.2 OC c MUST a )\ndITStructureRules: ( 0 FORM 1.2 SUP 0 )\n",
 	} {
 		f.Add([]byte(s))
 	}

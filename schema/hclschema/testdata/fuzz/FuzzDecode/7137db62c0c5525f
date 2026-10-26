@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("ldap_syntax\"0.0\"{desc=\"$00005\xc1\x87\"}")

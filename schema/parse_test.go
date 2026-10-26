@@ -270,8 +270,15 @@ func FuzzDefinition(f *testing.F) {
 	f.Add(`( 1.2 NAME ( 'a' 'b' ) DESC 'q\27\5c' SUP x X-A ( 'p' 'q' ) )`)
 	f.Add(`( 1.2 SYNTAX 1.2{64} )`)
 	f.Add(`( 1.2 APPLIES ( a $ b ) )`)
+	f.Add(`( 2.5.6.6 NAME 'r' DESC 'd' OBSOLETE AUX ( a $ b ) MUST c MAY ( d $ e ) NOT f X-A 'g' )`)
+	f.Add(`( 1.2 NAME 'f' OC person MUST ( cn $ sn ) MAY uid )`)
+	f.Add(`( 2147483647 NAME 'r' FORM f SUP ( 0 1 2 ) X-B ( ) )`)
+	f.Add(`( 1 FORM f SUP (2 3) )`)
 	f.Fuzz(func(t *testing.T, in string) {
 		for _, p := range []func(string) (interface{ String() string }, error){
+			func(s string) (interface{ String() string }, error) { return ParseDITContentRule(s) },
+			func(s string) (interface{ String() string }, error) { return ParseNameForm(s) },
+			func(s string) (interface{ String() string }, error) { return ParseDITStructureRule(s) },
 			func(s string) (interface{ String() string }, error) { return ParseAttributeType(s) },
 			func(s string) (interface{ String() string }, error) { return ParseObjectClass(s) },
 			func(s string) (interface{ String() string }, error) { return ParseMatchingRule(s) },
