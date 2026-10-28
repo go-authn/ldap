@@ -57,7 +57,147 @@ const (
 var folder = cases.Fold()
 
 // prepare runs the six steps. ok is false when a step fails.
+//
+// A string of printable ASCII (0x20-0x7E) takes a path that allocates at most
+// once, and gives what the general path gives. Each step on such a string:
+//
+//   - 2.1 Transcode: ASCII is UTF-8, so the string is valid.
+//   - 2.2 Map: the lists name U+0000-0008, 000E-001F and 007F as nothing and
+//     U+0009-000D as SPACE, so nothing printable moves; U+0020 maps to itself.
+//     Case folding (B.2 of RFC 3454; golang.org/x/text/cases foldFull) takes
+//     'A'-'Z' to 'a'-'z' and moves no other ASCII byte.
+//   - 2.3 Normalize: NFKC is the identity on ASCII, so the second fold has
+//     nothing to do either (NFKC cannot produce a capital from ASCII).
+//   - 2.4 Prohibit: every printable ASCII code point is in L, M, N, P, S or Z,
+//     and none is private use or a non-character.
+//
+// TestPrepareMatchesReferenceExhaustive checks all of this against the general
+// path, which stays as it was.
 func prepare(s string, fold bool, mode spaceMode, p part) (string, bool) {
+	if out, ok := printableASCII(s, fold); ok {
+		switch mode {
+		case numericSpace:
+			return removeSpacesASCII(out, false), true
+		case telephoneSpace:
+			return removeSpacesASCII(out, true), true
+		}
+		return spacesASCII(out, p), true
+	}
+	return prepareGeneral(s, fold, mode, p)
+}
+
+// printableASCII is steps 1 to 4 for a string of bytes 0x20-0x7E: s itself,
+// or a lowered copy when fold is set and s has a capital. ok is false for a
+// string with any other byte, which the general path handles.
+func printableASCII(s string, fold bool) (out string, ok bool) {
+	upper := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x20 || c > 0x7E {
+			return "", false
+		}
+		upper = upper || (c >= 'A' && c <= 'Z')
+	}
+	if !fold || !upper {
+		return s, true
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		b.WriteByte(c)
+	}
+	return b.String(), true
+}
+
+// removeSpacesASCII is removeSpaces for a string with no combining mark: every
+// SPACE goes, and with hyphen so does U+002D, the one ASCII hyphen isHyphen
+// knows.
+func removeSpacesASCII(s string, hyphen bool) string {
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == ' ' || (hyphen && s[i] == '-') {
+			n++
+		}
+	}
+	if n == 0 {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) - n)
+	for i := 0; i < len(s); i++ {
+		if s[i] != ' ' && !(hyphen && s[i] == '-') {
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
+}
+
+// spacesASCII is spaces for a string with no combining mark, so that every
+// SPACE counts. It is the same walk over the words, with one allocation.
+func spacesASCII(s string, p part) string {
+	words, wordBytes := 0, 0
+	for i := 0; i < len(s); i++ {
+		if s[i] != ' ' {
+			wordBytes++
+			if i == 0 || s[i-1] == ' ' {
+				words++
+			}
+		}
+	}
+	if words == 0 {
+		if p == whole {
+			return "  "
+		}
+		return " "
+	}
+	leading := s[0] == ' '
+	trailing := s[len(s)-1] == ' '
+	pre := p == whole || p == initialPart || leading
+	post := p == whole || p == finalPart || trailing
+	if words == 1 && wordBytes == len(s) && !pre && !post {
+		return s
+	}
+	n := wordBytes + 2*(words-1)
+	if pre {
+		n++
+	}
+	if post {
+		n++
+	}
+	var b strings.Builder
+	b.Grow(n)
+	if pre {
+		b.WriteByte(' ')
+	}
+	first := true
+	for i := 0; i < len(s); {
+		if s[i] == ' ' {
+			i++
+			continue
+		}
+		j := i
+		for j < len(s) && s[j] != ' ' {
+			j++
+		}
+		if !first {
+			b.WriteString("  ")
+		}
+		first = false
+		b.WriteString(s[i:j])
+		i = j
+	}
+	if post {
+		b.WriteByte(' ')
+	}
+	return b.String()
+}
+
+// prepareGeneral is the six steps for any string.
+func prepareGeneral(s string, fold bool, mode spaceMode, p part) (string, bool) {
 	// 1. Transcode. A value here is UTF-8 already, or it is not a string of
 	// characters at all.
 	if !utf8.ValidString(s) {

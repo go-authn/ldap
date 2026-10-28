@@ -3,6 +3,25 @@
 Releases follow [semantic versioning](https://semver.org). Releases before
 v0.11.0 are described on the repository's GitHub releases page.
 
+## v0.11.1
+
+Performance only; no API change and no change of result.
+
+### Changed
+
+- String matching rules (`schema.Schema.Equal`, `Less`, `Substrings`, and so
+  `Validate`) prepare a value of printable ASCII (0x20-0x7E) without the
+  `x/text` transform round trips: RFC 4518 2.2 maps none of those bytes, NFKC
+  is the identity on them, 2.4 prohibits none of them, and case folding only
+  lowers `A`-`Z`. At most one allocation for such a value, none when nothing
+  changes. Any other string takes the general path, unchanged. The result is
+  proved equal to v0.11.0's by an exhaustive test over every string of one or
+  two bytes below 0x80 and every byte 0x80-0xFF, and by `FuzzPrepareMatchesReference`.
+  `BenchmarkPrepareASCII`: 6-13 allocations per value before, 1-2 after.
+- The DN parser puts the AVAs of all RDNs in one array: 11 allocations and
+  392 B before, 6 and 280 B after, for a four-RDN DN
+  (`BenchmarkParseDN`; `FuzzParseDNMatchesReference`).
+
 ## v0.11.0
 
 The three kinds of definition RFC 4512 4.1.6 and 4.1.7 define, and this
