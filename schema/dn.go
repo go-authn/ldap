@@ -29,8 +29,13 @@ func parseDN(s string) ([][]ava, error) {
 	if strings.TrimSpace(s) == "" {
 		return nil, nil
 	}
-	var out [][]ava
-	var rdn []ava
+	// Every AVA of every RDN lives in one array, and an RDN is a slice of it
+	// with its capacity cut, so that appending to one cannot reach the next.
+	// A separator that is escaped or inside a hex string only over-counts.
+	rdns := strings.Count(s, ",") + strings.Count(s, ";")
+	all := make([]ava, 0, rdns+1+strings.Count(s, "+"))
+	out := make([][]ava, 0, rdns+1)
+	from := 0 // where the RDN being read starts in all
 	i := 0
 	for {
 		// attributeType
@@ -62,16 +67,16 @@ func parseDN(s string) ([][]ava, error) {
 		if err != nil {
 			return nil, err
 		}
-		rdn = append(rdn, ava{typ: typ, value: val})
+		all = append(all, ava{typ: typ, value: val})
 		if i == len(s) {
-			out = append(out, rdn)
+			out = append(out, all[from:len(all):len(all)])
 			return out, nil
 		}
 		switch s[i] {
 		case '+':
 		case ',', ';':
-			out = append(out, rdn)
-			rdn = nil
+			out = append(out, all[from:len(all):len(all)])
+			from = len(all)
 		default:
 			return nil, errDN
 		}
@@ -118,6 +123,16 @@ func hexValue(s string, i int) ([]byte, int, error) {
 // end.
 func stringValue(s string, i int) ([]byte, int, error) {
 	var out []byte
+	// The value is at most as long as the text up to the next separator, so
+	// one allocation holds it; an escaped separator only makes this a lower
+	// bound. A value with nothing in it stays nil.
+	n := strings.IndexAny(s[i:], ",;+")
+	if n < 0 {
+		n = len(s) - i
+	}
+	if n > 0 {
+		out = make([]byte, 0, n)
+	}
 	keep := 0 // length of out up to the last character that was not a bare space
 	for i < len(s) {
 		c := s[i]
