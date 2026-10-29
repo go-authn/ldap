@@ -97,6 +97,12 @@ type description struct {
 // unrecognized." A server that ignored an option it did not understand would
 // answer for "cn;x-secret" with the values of cn.
 func (s *Schema) Describe(desc string) (t *AttributeType, options []string, ok bool) {
+	if strings.IndexByte(desc, ';') < 0 {
+		if t = s.AttributeType(desc); t == nil {
+			return nil, nil, false
+		}
+		return t, []string{}, true
+	}
 	parts := strings.Split(desc, ";")
 	if t = s.AttributeType(parts[0]); t == nil {
 		return nil, nil, false
@@ -114,6 +120,10 @@ func (s *Schema) Describe(desc string) (t *AttributeType, options []string, ok b
 }
 
 func (s *Schema) describe(desc string) (description, bool) {
+	if strings.IndexByte(desc, ';') < 0 { // no options: nothing to split or join
+		t := s.AttributeType(desc)
+		return description{t: t}, t != nil
+	}
 	t, opts, ok := s.Describe(desc)
 	return description{t: t, options: strings.Join(opts, ";")}, ok
 }
@@ -188,6 +198,9 @@ type validation struct {
 	// rdnRead is whether the RDN was read (a root DSE has none).
 	rdnTypes []*AttributeType
 	rdnRead  bool
+	// listedBuf is where listed starts: an entry has a handful of classes,
+	// and the slice should not be a heap allocation per entry.
+	listedBuf [8]*ObjectClass
 }
 
 func (v *validation) add(k ProblemKind, attr, class, format string, args ...any) {
@@ -197,7 +210,9 @@ func (v *validation) add(k ProblemKind, attr, class, format string, args ...any)
 // classes checks objectClass and records the classes the entry lists.
 func (v *validation) classes(e Entry) {
 	oc := v.s.AttributeType("objectClass")
-	var values [][]byte
+	var valuesBuf [8][]byte
+	values := valuesBuf[:0]
+	v.listed = v.listedBuf[:0]
 	for _, a := range e.Attributes {
 		if d, ok := v.s.describe(a.Description); ok && d.t == oc {
 			values = append(values, a.Values...)
@@ -220,21 +235,13 @@ func (v *validation) classes(e Entry) {
 	// RFC 4512 3.3: "all superclasses of the named classes SHALL be
 	// implicitly added as well if not already present".
 	for _, c := range v.listed {
-		var walk func(*ObjectClass)
-		walk = func(x *ObjectClass) {
-			for _, sup := range x.sup {
-				if !slices.Contains(v.listed, sup) {
-					v.add(MissingSuperclass, "objectClass", sup.Name(), "%s is a superclass of %s and is not listed (RFC 4512 3.3)", sup.Name(), c.Name())
-				}
-				walk(sup)
-			}
-		}
-		walk(c)
+		v.missingSupers(c, c)
 	}
 	// RFC 4512 2.4.2: "precisely one structural object class superclass
 	// chain which has a single structural object class as the most
 	// subordinate object class".
-	var structural, leaves []*ObjectClass
+	var structuralBuf, leavesBuf [8]*ObjectClass
+	structural, leaves := structuralBuf[:0], leavesBuf[:0]
 	for _, c := range v.listed {
 		if c.Kind == Structural {
 			structural = append(structural, c)
@@ -267,6 +274,17 @@ func (v *validation) classes(e Entry) {
 		if !slices.ContainsFunc(v.listed, func(o *ObjectClass) bool { return o.Kind != Abstract && o.IsA(c) }) {
 			v.add(AbstractAlone, "objectClass", c.Name(), "the abstract class %s is not the superclass of any structural or auxiliary class it has (RFC 4512 2.4.1)", c.Name())
 		}
+	}
+}
+
+// missingSupers says every superclass of x, up the chain, that the entry does
+// not list; c is the listed class the walk began at.
+func (v *validation) missingSupers(c, x *ObjectClass) {
+	for _, sup := range x.sup {
+		if !slices.Contains(v.listed, sup) {
+			v.add(MissingSuperclass, "objectClass", sup.Name(), "%s is a superclass of %s and is not listed (RFC 4512 3.3)", sup.Name(), c.Name())
+		}
+		v.missingSupers(c, sup)
 	}
 }
 
@@ -305,27 +323,25 @@ func (v *validation) content() {
 func (v *validation) attributes(e Entry) {
 	s := v.s
 	extensible := slices.ContainsFunc(v.listed, func(c *ObjectClass) bool { return c.OID == extensibleObjectOID })
-	var must, allowed []*AttributeType
+	var mustBuf [16]*AttributeType
+	must := mustBuf[:0]
 	for _, c := range v.listed {
 		for _, t := range c.must {
 			if !slices.Contains(must, t) {
 				must = append(must, t)
 			}
 		}
-		allowed = append(allowed, c.must...)
-		allowed = append(allowed, c.may...)
 	}
 	// RFC 4512 4.1.6: "An entry may contain any non-precluded attributes
 	// allowed by the object classes the entry belongs to as well as all
 	// attributes allowed by the governing content rule."
 	var precluded map[*AttributeType]bool
 	if v.rule != nil {
-		allowed = append(allowed, v.rule.must...)
-		allowed = append(allowed, v.rule.may...)
 		precluded = v.rule.notSet
 	}
-	seen := map[description]bool{}
-	present := map[*AttributeType]bool{}
+	// seen and present are sets of what the entry has so far; they are small.
+	var seen smallSet[description]
+	var present smallSet[*AttributeType]
 	for _, a := range e.Attributes {
 		d, ok := s.describe(a.Description)
 		if !ok {
@@ -333,11 +349,11 @@ func (v *validation) attributes(e Entry) {
 			continue
 		}
 		name := d.t.Name()
-		if seen[d] {
+		if seen.has(d) {
 			v.add(DuplicateDescription, a.Description, "", "the attribute %s appears twice (RFC 4512 2.5: descriptions are distinct)", a.Description)
 		}
-		seen[d] = true
-		present[d.t] = true
+		seen.add(d)
+		present.add(d.t)
 		if len(a.Values) == 0 {
 			v.add(NoValues, a.Description, "", "the attribute %s has no values (RFC 4512 2.2)", a.Description)
 		}
@@ -347,7 +363,7 @@ func (v *validation) attributes(e Entry) {
 		// RFC 4512 2.5.3: MAY name is satisfied by name and name;x, NOT by
 		// a subtype such as cn. Operational attributes are not the classes'
 		// business (RFC 4512 3.4).
-		if !d.t.Usage.Operational() && !slices.Contains(allowed, d.t) && !extensible {
+		if !d.t.Usage.Operational() && !v.allows(d.t) && !extensible {
 			v.add(NotAllowed, a.Description, "", "%s is not allowed by any of the entry's object classes", name)
 		}
 		// Precluded even in an extensibleObject: slapd checks NOT before it
@@ -373,7 +389,7 @@ func (v *validation) attributes(e Entry) {
 		}
 	}
 	for _, t := range must {
-		if !present[t] {
+		if !present.has(t) {
 			var by []string
 			for _, c := range v.listed {
 				if slices.Contains(c.must, t) {
@@ -385,10 +401,54 @@ func (v *validation) attributes(e Entry) {
 	}
 	if v.rule != nil {
 		for _, t := range v.rule.must {
-			if !present[t] && !slices.Contains(must, t) {
+			if !present.has(t) && !slices.Contains(must, t) {
 				v.add(MissingRequired, t.Name(), v.rule.Name(), "%s is required by the DIT content rule %s and is missing (RFC 4512 4.1.6)", t.Name(), v.rule.Name())
 			}
 		}
+	}
+}
+
+// allows reports whether a type is a MUST or a MAY of a class the entry lists,
+// or of the governing content rule.
+func (v *validation) allows(t *AttributeType) bool {
+	for _, c := range v.listed {
+		if slices.Contains(c.must, t) || slices.Contains(c.may, t) {
+			return true
+		}
+	}
+	return v.rule != nil && (slices.Contains(v.rule.must, t) || slices.Contains(v.rule.may, t))
+}
+
+// smallSet is a set that keeps its first 16 members in place, so that the
+// usual entry makes none of the maps the same code would.
+type smallSet[K comparable] struct {
+	a [16]K
+	n int
+	m map[K]struct{}
+}
+
+func (s *smallSet[K]) has(k K) bool {
+	if s.m != nil {
+		_, ok := s.m[k]
+		return ok
+	}
+	return slices.Contains(s.a[:s.n], k)
+}
+
+func (s *smallSet[K]) add(k K) {
+	switch {
+	case s.has(k):
+	case s.m == nil && s.n < len(s.a):
+		s.a[s.n] = k
+		s.n++
+	default:
+		if s.m == nil {
+			s.m = make(map[K]struct{}, 2*len(s.a))
+			for _, x := range s.a[:s.n] {
+				s.m[x] = struct{}{}
+			}
+		}
+		s.m[k] = struct{}{}
 	}
 }
 
@@ -547,6 +607,9 @@ func (v *validation) rdn(e Entry) {
 		}
 		found := false
 		for _, attr := range e.Attributes {
+			if found {
+				break // one value is enough; comparing the rest changes nothing
+			}
 			// The distinguished value is one of the attribute with no
 			// options: an RDN's AVAs have none (RFC 4512 2.3.1).
 			if v.s.AttributeType(attr.Description) != t {
@@ -555,6 +618,7 @@ func (v *validation) rdn(e Entry) {
 			for _, val := range attr.Values {
 				if v.s.Equal(t, val, a.value) == True {
 					found = true
+					break
 				}
 			}
 		}

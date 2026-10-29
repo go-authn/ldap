@@ -1,0 +1,2 @@
+go test fuzz v1
+string("UID=Alice,ou=people,dc=x\nOBJECTCLASS: Account\nobjectClass: TOP\nUID: alice\nuid;lang-fr: a\nuid;LANG-FR: b\nuidNumber: 007\nnosuch: x")

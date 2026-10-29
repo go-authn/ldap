@@ -134,12 +134,18 @@ func compareIntegers(a, b string) int {
 // parseInteger is RFC 4517 3.3.16: Integer = ( HYPHEN LDIGIT *DIGIT ) /
 // number. No sign on zero, no leading zero, no space, and no bound.
 func parseInteger(s string) (*big.Int, bool) {
-	digits := strings.TrimPrefix(s, "-")
-	if !isNumber(digits) || (digits == "0" && len(s) != 1) {
+	if !validInteger(s) {
 		return nil, false
 	}
 	n, _ := new(big.Int).SetString(s, 10)
 	return n, true
+}
+
+// validInteger is parseInteger's test without the number: checking a value's
+// syntax allocates nothing.
+func validInteger(s string) bool {
+	digits := strings.TrimPrefix(s, "-")
+	return isNumber(digits) && !(digits == "0" && len(s) != 1)
 }
 
 func octetKey(_ *Schema, v []byte, _ part) (string, bool) { return string(v), true }
@@ -163,7 +169,14 @@ func timeKey(_ *Schema, v []byte, _ part) (string, bool) {
 	return t.UTC().Format("20060102150405.000000000"), true
 }
 
-func oidKey(s *Schema, v []byte, _ part) (string, bool) { return s.resolveOID(string(v)) }
+func oidKey(s *Schema, v []byte, _ part) (string, bool) {
+	// The first conversion does not outlive the call; only a numeric OID,
+	// which is its own key, needs a string of its own.
+	if isNumericOID(string(v)) {
+		return string(v), true
+	}
+	return s.resolveDescriptor(string(v))
+}
 
 // firstComponent is the first component of a value of one of the schema
 // description syntaxes: "( 2.5.4.3 NAME ..." is 2.5.4.3.
