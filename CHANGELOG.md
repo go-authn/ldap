@@ -3,6 +3,30 @@
 Releases follow [semantic versioning](https://semver.org). Releases before
 v0.11.0 are described on the repository's GitHub releases page.
 
+## v0.11.2
+
+Performance only; no API change and no change of result. `Validate` of a ten
+attribute entry: 76 allocations before, 12 after (`BenchmarkValidate`).
+
+### Changed
+
+- `AttributeType`, `ObjectClass` and `MatchingRule` look a name up without
+  allocating a lower-case copy of an ASCII name of up to 64 bytes (anything
+  else still takes `strings.ToLower`).
+- `Describe` and `Validate` do not split and re-join a description that has
+  no options.
+- `Validate` keeps the classes, the MUSTs and the sets of descriptions and
+  types it has seen in place for the usual entry (the sets move to a map past
+  16 members), walks superclasses without a closure, checks a value of syntax
+  Integer without building a `big.Int`, resolves an objectIdentifierMatch
+  descriptor without a copy, and stops comparing RDN values once one matches.
+- Proved equal to v0.11.1: a reference copy of `Validate` in the tests and
+  `TestValidateMatchesReference` (random entries, both the standard and a
+  rules schema, both `StrictAuxiliary` settings, the whole `*ValidationError`
+  compared) and `FuzzValidateMatchesReference`; a planted fault (a MAY
+  ignored) fails the first. `TestConcurrentValidateIsRaceFree` runs under
+  `-race`.
+
 ## v0.11.1
 
 Performance only; no API change and no change of result.

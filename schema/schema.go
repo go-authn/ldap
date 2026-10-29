@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // A Schema is a set of definitions that refer to one another and have been
@@ -555,13 +556,13 @@ func (s *Schema) deriveUses() {
 
 // AttributeType finds a type by any of its names or its OID, without regard
 // to case, or returns nil.
-func (s *Schema) AttributeType(name string) *AttributeType { return s.typeBy[strings.ToLower(name)] }
+func (s *Schema) AttributeType(name string) *AttributeType { return lookupFold(s.typeBy, name) }
 
 // ObjectClass finds a class by any of its names or its OID, or returns nil.
-func (s *Schema) ObjectClass(name string) *ObjectClass { return s.classBy[strings.ToLower(name)] }
+func (s *Schema) ObjectClass(name string) *ObjectClass { return lookupFold(s.classBy, name) }
 
 // MatchingRule finds a rule by any of its names or its OID, or returns nil.
-func (s *Schema) MatchingRule(name string) *MatchingRule { return s.ruleBy[strings.ToLower(name)] }
+func (s *Schema) MatchingRule(name string) *MatchingRule { return lookupFold(s.ruleBy, name) }
 
 // Syntax finds a syntax by its OID, or returns nil. Syntaxes have no names
 // (RFC 4517 3.1).
@@ -626,9 +627,36 @@ func (s *Schema) resolveOID(v string) (string, bool) {
 	if isNumericOID(v) {
 		return v, true
 	}
+	return s.resolveDescriptor(v)
+}
+
+// resolveDescriptor is resolveOID for a value that is not a numeric OID.
+func (s *Schema) resolveDescriptor(v string) (string, bool) {
 	if !isKeystring(v) {
 		return "", false
 	}
-	o := s.oidOf[strings.ToLower(v)]
+	o := lookupFold(s.oidOf, v)
 	return o, o != ""
+}
+
+// lookupFold is m[strings.ToLower(name)] without the allocation for a name of
+// ASCII and at most 64 bytes, which is every name a schema defines in practice.
+// Anything else takes strings.ToLower.
+func lookupFold[T any](m map[string]T, name string) T {
+	var buf [64]byte
+	if len(name) <= len(buf) {
+		b := buf[:len(name)]
+		for i := 0; i < len(name); i++ {
+			c := name[i]
+			if c >= utf8.RuneSelf {
+				return m[strings.ToLower(name)]
+			}
+			if 'A' <= c && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			b[i] = c
+		}
+		return m[string(b)]
+	}
+	return m[strings.ToLower(name)]
 }

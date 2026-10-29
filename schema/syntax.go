@@ -23,7 +23,7 @@ var syntaxCheck = map[string]func(*Schema, []byte) bool{
 	"1.3.6.1.4.1.1466.115.121.1.17": func(_ *Schema, v []byte) bool { _, err := ParseDITStructureRule(string(v)); return err == nil },
 	"1.3.6.1.4.1.1466.115.121.1.24": func(s *Schema, v []byte) bool { _, ok := timeKey(s, v, whole); return ok },
 	"1.3.6.1.4.1.1466.115.121.1.26": func(_ *Schema, v []byte) bool { return ia5(v) },
-	"1.3.6.1.4.1.1466.115.121.1.27": func(_ *Schema, v []byte) bool { _, ok := parseInteger(string(v)); return ok },
+	"1.3.6.1.4.1.1466.115.121.1.27": func(_ *Schema, v []byte) bool { return validInteger(string(v)) },
 	"1.3.6.1.4.1.1466.115.121.1.30": func(_ *Schema, v []byte) bool { _, err := ParseMatchingRule(string(v)); return err == nil },
 	"1.3.6.1.4.1.1466.115.121.1.31": func(_ *Schema, v []byte) bool { _, err := ParseMatchingRuleUse(string(v)); return err == nil },
 	"1.3.6.1.4.1.1466.115.121.1.34": func(s *Schema, v []byte) bool {
