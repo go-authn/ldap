@@ -3,6 +3,28 @@
 Releases follow [semantic versioning](https://semver.org). Releases before
 v0.11.0 are described on the repository's GitHub releases page.
 
+## v0.11.3
+
+Performance only; no API change and no change of result. `GoverningStructureRule`
+of an account: 12 allocations before, 5 after (`BenchmarkGoverningStructureRule`);
+`Validate` of a ten attribute entry: 12 at v0.11.2, 9 now
+(`BenchmarkValidate`); the DN parser 6 -> 3 for a four-RDN DN.
+
+### Changed
+
+- `GoverningStructureRule` reads only the types of the RDN when the entry has a
+  structural class: the comparison of the RDN's values only produced problems
+  that the function drops in that case, and `Validate` makes it.
+- The DN parser writes the values of all AVAs into one buffer.
+- `Validate` no longer lets its working state escape to the heap, and keeps the
+  name forms it considers in place.
+- Proved equal to v0.11.2: `refGoverningStructureRule`, a copy of the v0.11.2
+  function, and `TestGoverningStructureRuleMatchesReference` (30,000 random
+  entries and every superior rule against a rules schema, the standard schema,
+  and every shape the rules tests name; rule and the whole `*ValidationError`
+  compared) and `FuzzGoverningStructureRuleMatchesReference`. A planted fault
+  (the OBSOLETE name form ignored; the RDN types cut to one) fails it.
+
 ## v0.11.2
 
 Performance only; no API change and no change of result. `Validate` of a ten
