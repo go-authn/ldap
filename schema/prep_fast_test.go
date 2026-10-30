@@ -288,7 +288,7 @@ func TestStringValueMatchesReference(t *testing.T) {
 		"alice+cn=b", `x\\y;z`, `\#a`, "é,", " ", "a\\20 ,", "abc",
 	} {
 		for i := 0; i <= len(s); i++ {
-			got, gi, gerr := stringValue(s, i)
+			got, gi, gerr := stringValueBoth(t, s, i)
 			want, wi, werr := stringValueReference(s, i)
 			if !reflect.DeepEqual(got, want) || gi != wi || gerr != werr {
 				t.Errorf("stringValue(%q, %d) = (%#v, %d, %v), reference (%#v, %d, %v)", s, i, got, gi, gerr, want, wi, werr)
@@ -297,12 +297,28 @@ func TestStringValueMatchesReference(t *testing.T) {
 	}
 }
 
+// stringValueBoth reads a value into an arena with room, and into one with
+// none and bytes already in it (so that it grows under the reader), and says
+// so if they differ.
+func stringValueBoth(t testing.TB, s string, i int) ([]byte, int, error) {
+	t.Helper()
+	roomy := make([]byte, 0, len(s)+8)
+	a, ai, aerr := stringValue(s, i, &roomy)
+	full := make([]byte, 2)
+	full = full[:2:2]
+	b, bi, berr := stringValue(s, i, &full)
+	if !reflect.DeepEqual(a, b) || ai != bi || aerr != berr {
+		t.Fatalf("stringValue(%q, %d): %#v/%d/%v in a roomy arena, %#v/%d/%v in a full one", s, i, a, ai, aerr, b, bi, berr)
+	}
+	return a, ai, aerr
+}
+
 func FuzzStringValueMatchesReference(f *testing.F) {
 	for _, s := range []string{"", "a,b", `a\,b`, `a\2cb`, "a  ", `a\`, "x+y"} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
-		got, gi, gerr := stringValue(s, 0)
+		got, gi, gerr := stringValueBoth(t, s, 0)
 		want, wi, werr := stringValueReference(s, 0)
 		if !reflect.DeepEqual(got, want) || gi != wi || gerr != werr {
 			t.Fatalf("stringValue(%q) = (%#v, %d, %v), reference (%#v, %d, %v)", s, got, gi, gerr, want, wi, werr)

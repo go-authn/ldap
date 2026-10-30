@@ -172,7 +172,10 @@ type ValidateOptions struct {
 
 // ValidateWith is Validate, with options.
 func (s *Schema) ValidateWith(e Entry, o ValidateOptions) error {
-	v := &validation{s: s, opt: o}
+	// An entry has a handful of classes: listed starts in a buffer of the
+	// stack, not in an allocation per entry.
+	var listedBuf [8]*ObjectClass
+	v := &validation{s: s, opt: o, listed: listedBuf[:0]}
 	v.classes(e)
 	v.content()
 	v.attributes(e)
@@ -198,9 +201,6 @@ type validation struct {
 	// rdnRead is whether the RDN was read (a root DSE has none).
 	rdnTypes []*AttributeType
 	rdnRead  bool
-	// listedBuf is where listed starts: an entry has a handful of classes,
-	// and the slice should not be a heap allocation per entry.
-	listedBuf [8]*ObjectClass
 }
 
 func (v *validation) add(k ProblemKind, attr, class, format string, args ...any) {
@@ -212,7 +212,6 @@ func (v *validation) classes(e Entry) {
 	oc := v.s.AttributeType("objectClass")
 	var valuesBuf [8][]byte
 	values := valuesBuf[:0]
-	v.listed = v.listedBuf[:0]
 	for _, a := range e.Attributes {
 		if d, ok := v.s.describe(a.Description); ok && d.t == oc {
 			values = append(values, a.Values...)
@@ -460,14 +459,20 @@ func (v *validation) naming() {
 	if v.structural == nil || !v.rdnRead {
 		return
 	}
-	var forms []*NameForm
+	var formsBuf [4]*NameForm
+	forms := formsBuf[:0]
 	for _, f := range v.s.nameFormsOf[v.structural] {
 		if !f.Obsolete {
 			forms = append(forms, f)
 		}
 	}
-	if len(forms) == 0 || slices.ContainsFunc(forms, v.names) {
+	if len(forms) == 0 {
 		return
+	}
+	for _, f := range forms {
+		if v.names(f) {
+			return
+		}
 	}
 	v.add(NameFormViolation, "", v.structural.Name(), "the RDN (%s) is allowed by no name form of %s: %s", typeNames(v.rdnTypes), v.structural.Name(), formNeeds(forms))
 }
@@ -539,9 +544,17 @@ func (s *Schema) GoverningStructureRule(e Entry, superior *DITStructureRule) (*D
 	if s.activeStructureRules == 0 {
 		return nil, nil
 	}
-	v := &validation{s: s}
+	var listedBuf [8]*ObjectClass
+	v := &validation{s: s, listed: listedBuf[:0]}
 	v.classes(e)
-	v.rdn(e)
+	if v.structural != nil {
+		// The problems of an entry with a structural class are not reported
+		// below, and nothing but its RDN's types decides: the values of the
+		// RDN are Validate's business, so they are not compared again.
+		v.rdnTypesOnly(e)
+	} else {
+		v.rdn(e)
+	}
 	if v.structural == nil || !v.rdnRead {
 		if !v.rdnRead && !slices.ContainsFunc(v.problems, func(p Problem) bool { return p.Kind == BadDN }) {
 			v.add(NoStructureRule, "", "", "the root DSE is governed by no DIT structure rule")
@@ -581,6 +594,27 @@ func (s *Schema) GoverningStructureRule(e Entry, superior *DITStructureRule) (*D
 		v.add(NameFormViolation, "", v.structural.Name(), "the RDN (%s) is allowed by the name form of no DIT structure rule that places %s %s: %s", typeNames(v.rdnTypes), v.structural.Name(), where, formNeeds(forms))
 	}
 	return nil, &ValidationError{DN: e.DN, Problems: v.problems}
+}
+
+// rdnTypesOnly is rdn without its comparison of values: it reads the DN and
+// records, as rdn does, whether the RDN was read and the types of its AVAs
+// that the schema defines. The problems it leaves out are RDNNotPresent's,
+// which GoverningStructureRule drops when the entry has a structural class.
+func (v *validation) rdnTypesOnly(e Entry) {
+	rdns, err := parseDN(e.DN)
+	if err != nil {
+		v.add(BadDN, "", "", "the DN %q is not a DN (RFC 4514)", e.DN)
+		return
+	}
+	if len(rdns) == 0 {
+		return // the root DSE
+	}
+	v.rdnRead = true
+	for _, a := range rdns[0] {
+		if t := v.s.AttributeType(a.typ); t != nil && !slices.Contains(v.rdnTypes, t) {
+			v.rdnTypes = append(v.rdnTypes, t)
+		}
+	}
 }
 
 // rdn checks that each AVA of the RDN is a value of the entry (RFC 4512

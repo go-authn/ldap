@@ -36,6 +36,7 @@ func parseDN(s string) ([][]ava, error) {
 	all := make([]ava, 0, rdns+1+strings.Count(s, "+"))
 	out := make([][]ava, 0, rdns+1)
 	from := 0 // where the RDN being read starts in all
+	arena := make([]byte, 0, len(s))
 	i := 0
 	for {
 		// attributeType
@@ -62,7 +63,7 @@ func parseDN(s string) ([][]ava, error) {
 		if i < len(s) && s[i] == '#' {
 			val, i, err = hexValue(s, i+1)
 		} else {
-			val, i, err = stringValue(s, i)
+			val, i, err = stringValue(s, i, &arena)
 		}
 		if err != nil {
 			return nil, err
@@ -121,24 +122,27 @@ func hexValue(s string, i int) ([]byte, int, error) {
 // stringValue reads a value up to the next unescaped ',', ';' or '+',
 // honouring RFC 4514 2.4's escapes, and trims the unescaped spaces at its
 // end.
-func stringValue(s string, i int) ([]byte, int, error) {
-	var out []byte
-	// The value is at most as long as the text up to the next separator, so
-	// one allocation holds it; an escaped separator only makes this a lower
-	// bound. A value with nothing in it stays nil.
-	n := strings.IndexAny(s[i:], ",;+")
-	if n < 0 {
-		n = len(s) - i
+//
+// The value is written at the end of *arena, one buffer for every value of a
+// DN, and is a slice of it with its capacity cut. A value with nothing in it
+// is nil, as it always was.
+func stringValue(s string, i int, arena *[]byte) ([]byte, int, error) {
+	out := *arena
+	from := len(out)
+	keep := from // length of out up to the last character that was not a bare space
+	// value is what has been read, and leaves the arena after it.
+	value := func() []byte {
+		*arena = out
+		if len(out) == from {
+			return nil
+		}
+		return out[from:keep:keep]
 	}
-	if n > 0 {
-		out = make([]byte, 0, n)
-	}
-	keep := 0 // length of out up to the last character that was not a bare space
 	for i < len(s) {
 		c := s[i]
 		switch {
 		case c == ',' || c == ';' || c == '+':
-			return out[:keep], i, nil
+			return value(), i, nil
 		case c == '\\':
 			if i+1 >= len(s) {
 				return nil, i, errDN
@@ -163,7 +167,7 @@ func stringValue(s string, i int) ([]byte, int, error) {
 			}
 		}
 	}
-	return out[:keep], i, nil
+	return value(), i, nil
 }
 
 func safeSlice(s string, from, to int) string {
