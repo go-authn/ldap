@@ -25,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
-        with: { go-version: '1.27.2', check-latest: true, cache: true }
+        with: { go-version-file: go.mod, check-latest: true, cache: true }
       # ⛔ OpenLDAP's own client is the JUDGE. A server tested only by a
       # client from this same module can agree with it about a misreading of
       # the protocol and both be wrong -- which is exactly how the library
@@ -56,7 +56,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
-        with: { go-version: '1.27.2', check-latest: true, cache: true }
+        with: { go-version-file: go.mod, check-latest: true, cache: true }
       # ⛔ The judge belongs in EVERY lane that runs the tests. In the sibling
       # repo it was in `test` and nowhere else, so every judged test SKIPPED
       # here -- silently -- and this lane measured a third less than it
@@ -73,7 +73,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
-        with: { go-version: '1.27.2', check-latest: true, cache: true }
+        with: { go-version-file: go.mod, check-latest: true, cache: true }
       - name: ldap-utils
         run: sudo apt-get update && sudo apt-get install -y ldap-utils
       - env:
@@ -113,6 +113,17 @@ jobs:
             exit 1
           fi
 
+  # The toolchain is the one go.mod names (go-version-file), so a floor too
+  # low to carry the standard library's fixes is a finding HERE: govulncheck
+  # exits 3 on any, and the job fails.
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version-file: go.mod, check-latest: true, cache: true }
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
   published-schemas:
     # SUPANN, eduPerson and Samba cannot be committed (no licence, CC
     # BY-NC-SA 4.0, GPL-3.0): this lane downloads them, checks the SHA-256
@@ -122,7 +133,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
-        with: { go-version: '1.27.2', check-latest: true, cache: true }
+        with: { go-version-file: go.mod, check-latest: true, cache: true }
       - run: go test -count=1 -run TestPublishedSchemas -v ./cmd/ldapschema
         env:
           LDAP_SCHEMA_NETWORK: "1"
@@ -137,7 +148,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
-        with: { go-version: '1.27.2', check-latest: true, cache: true }
+        with: { go-version-file: go.mod, check-latest: true, cache: true }
       - run: GOARCH=${{ matrix.goarch }} go build ./...
       # ⛔ `qemu-user-static` is a VIRTUAL package on Ubuntu 26.04, which
       # `ubuntu-latest` became on 2026-10-19, and apt refuses to choose between its

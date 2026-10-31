@@ -3,6 +3,15 @@
 Releases follow [semantic versioning](https://semver.org). Releases before
 v0.11.0 are described on the repository's GitHub releases page.
 
+## v0.11.4
+
+The module's `go` directive is `1.27.3` (was `1.27.1`): a program built with the
+floor's own toolchain carried three standard-library vulnerabilities
+(GO-2026-6809 in crypto/x509, GO-2026-6617 and GO-2026-6613 in net/http), fixed
+in 1.27.2 and 1.27.3. CI takes its toolchain from go.mod (`go-version-file`)
+and runs `govulncheck ./...`, which fails the build on any finding. Nothing
+else changes.
+
 ## v0.11.3
 
 Performance only; no API change and no change of result. `GoverningStructureRule`
