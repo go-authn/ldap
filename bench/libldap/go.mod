@@ -4,7 +4,7 @@
 // "Performance".
 module github.com/go-authn/ldap/bench/libldap
 
-go 1.27.1
+go 1.27.3
 
 require github.com/go-authn/ldap v0.11.2
 
