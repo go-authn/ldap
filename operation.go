@@ -147,7 +147,11 @@ func (c *conn) operation(ctx context.Context, m *message, log *slog.Logger) {
 // went wrong inside a directory is for the directory's own log, and a
 // diagnostic built from an internal error hands a client the shape of the
 // code behind it.
-func (c *conn) answer(id int, resp ber.Tag, r Result, err error, log *slog.Logger, op string) {
+func (c *conn) answer(ctx context.Context, id int, resp ber.Tag, r Result, err error, log *slog.Logger, op string) {
+	if pastDeadline(ctx, err) {
+		c.send(resultMessage(id, resp, Result{Code: TimeLimitExceeded}))
+		return
+	}
 	if err != nil {
 		log.Error("the handler failed", "op", op, "err", err)
 		c.send(resultMessage(id, resp, Result{Code: Other}))
@@ -163,7 +167,11 @@ func (c *conn) answer(id int, resp ber.Tag, r Result, err error, log *slog.Logge
 // normal or control processing), no Pre-Read response control is provided."
 // A control attached to a failure would describe an entry the operation did
 // not produce.
-func (c *conn) answerWrite(id int, resp ber.Tag, req readAsking, r WriteResult, err error, log *slog.Logger, op string) {
+func (c *conn) answerWrite(ctx context.Context, id int, resp ber.Tag, req readAsking, r WriteResult, err error, log *slog.Logger, op string) {
+	if pastDeadline(ctx, err) {
+		c.send(resultMessage(id, resp, Result{Code: TimeLimitExceeded}))
+		return
+	}
 	if err != nil {
 		log.Error("the handler failed", "op", op, "err", err)
 		c.send(resultMessage(id, resp, Result{Code: Other}))
@@ -219,7 +227,7 @@ func (c *conn) compare(ctx context.Context, m *message) {
 		return
 	}
 	r, err := c.srv.Compare.Compare(ctx, c, req)
-	c.answer(m.id, appCompareResponse, r, err, c.srv.logger(), "compare")
+	c.answer(ctx, m.id, appCompareResponse, r, err, c.srv.logger(), "compare")
 }
 
 func (c *conn) add(ctx context.Context, m *message) {
@@ -237,7 +245,7 @@ func (c *conn) add(ctx context.Context, m *message) {
 		return
 	}
 	r, err := c.srv.Add.Add(ctx, c, req)
-	c.answerWrite(m.id, appAddResponse, req, r, err, c.srv.logger(), "add")
+	c.answerWrite(ctx, m.id, appAddResponse, req, r, err, c.srv.logger(), "add")
 }
 
 func (c *conn) modify(ctx context.Context, m *message) {
@@ -255,7 +263,7 @@ func (c *conn) modify(ctx context.Context, m *message) {
 		return
 	}
 	r, err := c.srv.Modify.Modify(ctx, c, req)
-	c.answerWrite(m.id, appModifyResponse, req, r, err, c.srv.logger(), "modify")
+	c.answerWrite(ctx, m.id, appModifyResponse, req, r, err, c.srv.logger(), "modify")
 }
 
 func (c *conn) del(ctx context.Context, m *message) {
@@ -271,7 +279,7 @@ func (c *conn) del(ctx context.Context, m *message) {
 		return
 	}
 	r, err := c.srv.Delete.Delete(ctx, c, req)
-	c.answerWrite(m.id, appDelResponse, req, r, err, c.srv.logger(), "delete")
+	c.answerWrite(ctx, m.id, appDelResponse, req, r, err, c.srv.logger(), "delete")
 }
 
 func (c *conn) modifyDN(ctx context.Context, m *message) {
@@ -289,5 +297,5 @@ func (c *conn) modifyDN(ctx context.Context, m *message) {
 		return
 	}
 	r, err := c.srv.ModifyDN.ModifyDN(ctx, c, req)
-	c.answerWrite(m.id, appModDNResponse, req, r, err, c.srv.logger(), "modifydn")
+	c.answerWrite(ctx, m.id, appModDNResponse, req, r, err, c.srv.logger(), "modifydn")
 }

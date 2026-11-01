@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-authn/ldap/schema"
 )
@@ -195,6 +196,13 @@ func (c *conn) search(ctx context.Context, m *message, req *SearchRequest, log *
 		return
 	}
 
+	// RFC 4511 4.5.1.5: the client's timeLimit (seconds) bounds the search;
+	// the smaller of it and the server's Timeout applies, as for sizeLimit.
+	if req.TimeLimit > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeLimit)*time.Second)
+		defer cancel()
+	}
 	w := &entryWriter{
 		c: c, id: m.id, ctx: ctx,
 		typesOnly: req.TypesOnly,
@@ -218,7 +226,7 @@ func (c *conn) search(ctx context.Context, m *message, req *SearchRequest, log *
 		// operation, so nothing is sent -- a searchResDone here would arrive
 		// for an operation the client has already forgotten.
 	default:
-		c.answer(m.id, appSearchResDone, r, err, log, "search")
+		c.answer(ctx, m.id, appSearchResDone, r, err, log, "search")
 	}
 }
 
