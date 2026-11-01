@@ -45,7 +45,7 @@ type conn struct {
 	// is dropped.
 	expired map[int]struct{}
 	closed  chan struct{}
-	isShut   bool
+	isShut  bool
 }
 
 // newConn is the only way to build one.
@@ -62,7 +62,7 @@ func newConn(s *Server, nc net.Conn) *conn {
 		r:        bufio.NewReader(nc),
 		inflight: map[int]context.CancelFunc{},
 		expired:  map[int]struct{}{},
-		closed:  make(chan struct{}),
+		closed:   make(chan struct{}),
 	}
 }
 
