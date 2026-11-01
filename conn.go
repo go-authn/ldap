@@ -217,11 +217,15 @@ func (c *conn) run(wg *sync.WaitGroup, m *message, f func(context.Context)) bool
 	// later. This also gives every operation, not only a search, the right
 	// code: a cooperative write returning DeadlineExceeded would otherwise be
 	// answered `other`.
-	stopWatch := context.AfterFunc(ctx, func() {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			c.expire(m)
-		}
-	})
+	// Without a Timeout there is no deadline to watch, and no cost.
+	stopWatch := func() bool { return false }
+	if c.srv.Timeout > 0 {
+		stopWatch = context.AfterFunc(ctx, func() {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				c.expire(m)
+			}
+		})
+	}
 
 	wg.Add(1)
 	go func() {

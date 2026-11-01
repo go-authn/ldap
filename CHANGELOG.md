@@ -21,6 +21,8 @@ values keep the previous behaviour.
   discarded and its message id is refused (`protocolError`) meanwhile.
 - The client's search `timeLimit` is applied to the handler's context.
 - No handler interface changed: handlers already receive the context.
+- Cost (`BenchmarkRun`, allocations per operation, exact): 3 before and now
+  with no `Timeout`; with a `Timeout` 10 before, 16 now (the deadline watcher).
 
 ## v0.11.4
 
