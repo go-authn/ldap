@@ -137,6 +137,21 @@ are cancelled. RFC 4511 §4.3 says an unbind "terminates any outstanding
 operations". Before v0.6.0 the server waited first, so a connection told it
 was ending stayed open for as long as its slowest operation took.
 
+Connections and time are bounded as well (v0.12.0). `MaxConnections` caps the
+connections held at once and `MaxConnectionsPerIP` those of one remote
+address; both default to no limit, as in slapd, which has none. A connection
+over a cap is sent a `busy` notice of disconnection (RFC 4511 §4.4.1) and
+closed at once, never queued, and the refusals themselves are bounded (64 at a
+time, then a bare close). `Timeout` is the deadline of one operation, carried by
+the context every handler receives; the client's search `timeLimit`
+(RFC 4511 §4.5.1.5) also applies to a search. When the deadline passes, **the
+server itself** answers `timeLimitExceeded` for any operation, even if the
+handler is blocked and ignores its context; the late result is dropped. A Go
+goroutine cannot be killed, so a handler that never returns keeps counting
+against `MaxPending`/`MaxPendingAuth`, which closes a connection that
+accumulates them, and its message id cannot be reused meanwhile. An abandon
+(§4.11) cancels the context and sends nothing.
+
 ## Schema
 
 Package [`schema`](schema) is the directory schema of RFC 4512 section 4,

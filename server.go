@@ -78,6 +78,15 @@ type Server struct {
 	// asking for more than the server allows does not raise the server's.
 	MaxEntries int
 	// Timeout is how long one operation may take. Zero means no limit.
+	//
+	// The handler's context carries this deadline. When it expires the client
+	// is answered timeLimitExceeded (3) BY THE SERVER, whether or not the
+	// handler returns: a handler blocked on a slow source that ignores its
+	// context cannot hold a client for ever. Its goroutine cannot be killed,
+	// so it keeps counting against MaxPending/MaxPendingAuth until it
+	// returns, its late result is discarded, and its message id may not be
+	// reused meanwhile. A connection whose operations all expire this way
+	// reaches the pending limit and is closed.
 	Timeout time.Duration
 	// IdleTimeout is how long this server waits for a client to send a
 	// message: from the end of the previous one until the new one has
@@ -101,6 +110,16 @@ type Server struct {
 	// faster than they are answered -- before any bind -- grew this
 	// process's memory without bound.
 	MaxPending, MaxPendingAuth int
+	// MaxConnections bounds how many connections this server holds at once.
+	// Zero means no limit (slapd has none either; it stops at the file
+	// descriptor limit, which is a crash rather than a refusal). A connection
+	// over the limit is sent a notice of disconnection (RFC 4511 4.4.1) with
+	// result code busy and closed at once -- never queued.
+	MaxConnections int
+	// MaxConnectionsPerIP bounds how many connections one remote address may
+	// hold. Zero means no limit. Addresses are compared whole; a listener
+	// that is not TCP (a unix socket) is not subject to it.
+	MaxConnectionsPerIP int
 
 	// NamingContexts is what this server holds, published on the root DSE so
 	// that a client can find out where to search (RFC 4512 5.1.2).
@@ -138,6 +157,74 @@ type Server struct {
 	listeners map[net.Listener]struct{}
 	conns     map[*conn]struct{}
 	closing   bool
+	nconn     int            // accepted and not yet finished
+	perIP     map[string]int // same, by remote address
+	rejecting int            // goroutines telling a client it was refused
+}
+
+// maxRejecting bounds the goroutines writing a refusal, so that a flood over
+// the connection cap cannot itself become the resource exhaustion: past it a
+// connection is closed without a word.
+const maxRejecting = 64
+
+// admit counts a new connection, or says why it may not be held.
+func (s *Server) admit(nc net.Conn) (key string, ok bool) {
+	if s.MaxConnectionsPerIP > 0 {
+		if ta, isTCP := nc.RemoteAddr().(*net.TCPAddr); isTCP {
+			key = ta.IP.String()
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.MaxConnections > 0 && s.nconn >= s.MaxConnections {
+		return "", false
+	}
+	if key != "" && s.perIP[key] >= s.MaxConnectionsPerIP {
+		return "", false
+	}
+	s.nconn++
+	if key != "" {
+		if s.perIP == nil {
+			s.perIP = map[string]int{}
+		}
+		s.perIP[key]++
+	}
+	return key, true
+}
+
+func (s *Server) release(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nconn--
+	if key != "" {
+		if s.perIP[key]--; s.perIP[key] <= 0 {
+			delete(s.perIP, key)
+		}
+	}
+}
+
+// refuse tells a connection over the limit so, and closes it, without ever
+// waiting on the client for more than a moment.
+func (s *Server) refuse(nc net.Conn) {
+	s.mu.Lock()
+	if s.rejecting >= maxRejecting {
+		s.mu.Unlock()
+		nc.Close()
+		return
+	}
+	s.rejecting++
+	s.mu.Unlock()
+	go func() {
+		defer func() {
+			s.mu.Lock()
+			s.rejecting--
+			s.mu.Unlock()
+		}()
+		_ = nc.SetWriteDeadline(time.Now().Add(time.Second))
+		c := newConn(s, nc)
+		c.notice(Busy, "too many connections")
+		c.close()
+	}()
 }
 
 func (s *Server) logger() *slog.Logger {
@@ -219,7 +306,16 @@ func (s *Server) Serve(ln net.Listener) error {
 			}
 			return err
 		}
-		go s.serve(c)
+		key, ok := s.admit(c)
+		if !ok {
+			s.logger().Info("refusing a connection over the limit", "remote", c.RemoteAddr().String())
+			s.refuse(c)
+			continue
+		}
+		go func() {
+			defer s.release(key)
+			s.serve(c)
+		}()
 	}
 }
 

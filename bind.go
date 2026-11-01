@@ -4,8 +4,17 @@ package ldap
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 )
+
+// pastDeadline reports whether a handler's error is its operation's deadline
+// passing. The context is consulted too: a handler that fails with a
+// DeadlineExceeded of its own (a database call, say) while the operation is
+// within its time is a failure, and says `other` like any other.
+func pastDeadline(ctx context.Context, err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) && errors.Is(ctx.Err(), context.DeadlineExceeded)
+}
 
 // bind answers a bind request, simple or SASL.
 func (c *conn) bind(ctx context.Context, m *message, log *slog.Logger) {
@@ -45,6 +54,10 @@ func (c *conn) bind(ctx context.Context, m *message, log *slog.Logger) {
 		return
 	}
 	r, err := c.srv.Bind.Bind(ctx, c, req)
+	if pastDeadline(ctx, err) {
+		c.send(bindResponse(m.id, SASLResult{Result: Result{Code: TimeLimitExceeded}}))
+		return
+	}
 	if err != nil {
 		log.Error("the bind handler failed", "err", err)
 		c.send(bindResponse(m.id, SASLResult{Result: Result{Code: Other}}))
@@ -65,6 +78,10 @@ func (c *conn) bindSASL(ctx context.Context, m *message, req *BindRequest, log *
 		return
 	}
 	r, err := c.srv.SASL.BindSASL(ctx, c, req)
+	if pastDeadline(ctx, err) {
+		c.send(bindResponse(m.id, SASLResult{Result: Result{Code: TimeLimitExceeded}}))
+		return
+	}
 	if err != nil {
 		log.Error("the SASL handler failed", "mechanism", req.SASL.Mechanism, "err", err)
 		c.send(bindResponse(m.id, SASLResult{Result: Result{Code: Other}}))

@@ -39,7 +39,12 @@ type conn struct {
 	boundDN  string
 	controls []Control
 	inflight map[int]context.CancelFunc
-	closed   chan struct{}
+	// expired holds the ids of operations the server answered
+	// timeLimitExceeded while their handler was still running. They still
+	// count against the pending limit, and anything their handler sends later
+	// is dropped.
+	expired map[int]struct{}
+	closed  chan struct{}
 	isShut   bool
 }
 
@@ -56,7 +61,8 @@ func newConn(s *Server, nc net.Conn) *conn {
 		raw:      nc,
 		r:        bufio.NewReader(nc),
 		inflight: map[int]context.CancelFunc{},
-		closed:   make(chan struct{}),
+		expired:  map[int]struct{}{},
+		closed:  make(chan struct{}),
 	}
 }
 
@@ -184,14 +190,15 @@ func (c *conn) run(wg *sync.WaitGroup, m *message, f func(context.Context)) bool
 	// ⛔ RFC 4511 4.1.1.1: a message id must not be reused while an operation
 	// with it is outstanding. One that is says two different things about the
 	// same id, and an abandon could not name which.
-	if _, busy := c.inflight[m.id]; busy {
+	_, stuck := c.expired[m.id]
+	if _, busy := c.inflight[m.id]; busy || stuck {
 		c.mu.Unlock()
 		cancel()
 		c.send(resultMessage(m.id, responseFor(m.op.Tag), Refuse(ProtocolError,
 			"message id %d is already in flight", m.id)))
 		return true
 	}
-	if limit := c.srv.maxPending(c.boundDN != ""); limit > 0 && len(c.inflight) >= limit {
+	if limit := c.srv.maxPending(c.boundDN != ""); limit > 0 && len(c.inflight)+len(c.expired) >= limit {
 		c.mu.Unlock()
 		cancel()
 		return false
@@ -200,18 +207,58 @@ func (c *conn) run(wg *sync.WaitGroup, m *message, f func(context.Context)) bool
 	c.controls = m.controls
 	c.mu.Unlock()
 
+	// ⛔ The deadline is enforced by the SERVER, not left to the handler. A
+	// handler blocked on a slow source that never looks at its context would
+	// otherwise hold the client for ever: ctx expiring changes nothing for a
+	// goroutine that is not listening to it. When the deadline (and only the
+	// deadline -- an abandon or a closing connection has its own rules) fires
+	// while the operation has not yet sent its final response, the server
+	// sends timeLimitExceeded itself and drops whatever the handler says
+	// later. This also gives every operation, not only a search, the right
+	// code: a cooperative write returning DeadlineExceeded would otherwise be
+	// answered `other`.
+	stopWatch := context.AfterFunc(ctx, func() {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			c.expire(m)
+		}
+	})
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		defer cancel()
+		defer stopWatch()
 		defer func() {
 			c.mu.Lock()
 			delete(c.inflight, m.id)
+			delete(c.expired, m.id)
 			c.mu.Unlock()
 		}()
 		f(ctx)
 	}()
 	return true
+}
+
+// expire answers an operation whose deadline passed, if it is still
+// unanswered. The check and the response are one step under the write lock, so
+// a handler's own final response and this one cannot both go out.
+func (c *conn) expire(m *message) {
+	resp := responseFor(m.op.Tag)
+	if resp == 0 {
+		return
+	}
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	c.mu.Lock()
+	if _, live := c.inflight[m.id]; !live || c.isShut {
+		c.mu.Unlock()
+		return
+	}
+	delete(c.inflight, m.id)
+	c.expired[m.id] = struct{}{}
+	c.mu.Unlock()
+	c.srv.logger().Info("an operation passed its deadline", "op", int(m.op.Tag), "id", m.id)
+	c.emit(resultMessage(m.id, resp, Result{Code: TimeLimitExceeded}), false)
 }
 
 // abandon cancels an operation. There is no response to an abandon.
@@ -248,10 +295,26 @@ func (c *conn) abandon(m *message) {
 func (c *conn) send(p *ber.Packet) {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
+	c.writeLocked(p)
+}
+
+// writeLocked is send with c.wmu already held. A message for an operation the
+// server has already answered as expired is dropped.
+func (c *conn) writeLocked(p *ber.Packet) { c.emit(p, true) }
+
+func (c *conn) emit(p *ber.Packet, dropExpired bool) {
 	if c.isClosed() {
 		return
 	}
 	c.mu.Lock()
+	if dropExpired && len(p.Children) > 0 {
+		if id, ok := p.Children[0].Value.(int64); ok && id != 0 {
+			if _, late := c.expired[int(id)]; late {
+				c.mu.Unlock()
+				return
+			}
+		}
+	}
 	w := c.raw
 	// ⛔ An operation stops being outstanding when its FINAL response goes
 	// out, not when its goroutine returns. A client that has read the

@@ -3,6 +3,25 @@
 Releases follow [semantic versioning](https://semver.org). Releases before
 v0.11.0 are described on the repository's GitHub releases page.
 
+## v0.12.0
+
+Resource bounds for the server (go-authn/authnd#67). All additions; the zero
+values keep the previous behaviour.
+
+- `Server.MaxConnections` and `Server.MaxConnectionsPerIP`: connections over a
+  cap get a `busy` notice of disconnection and are closed, never queued.
+- `Server.Timeout` is now enforced by the server: at the deadline the client
+  is answered `timeLimitExceeded` (3) for any operation, whether or not the
+  handler returns. Previously a handler ignoring its context left the client
+  waiting for ever, and only a search mapped a deadline to code 3 (a bind,
+  compare or write answered `other`). A handler's `DeadlineExceeded` is mapped
+  only when the operation's own context has expired.
+- Such a handler still counts against `MaxPending`/`MaxPendingAuth` until it
+  returns, so leaked goroutines are bounded per connection; its late result is
+  discarded and its message id is refused (`protocolError`) meanwhile.
+- The client's search `timeLimit` is applied to the handler's context.
+- No handler interface changed: handlers already receive the context.
+
 ## v0.11.4
 
 The module's `go` directive is `1.27.3` (was `1.27.1`): a program built with the
