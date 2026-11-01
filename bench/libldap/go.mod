@@ -6,7 +6,7 @@ module github.com/go-authn/ldap/bench/libldap
 
 go 1.27.3
 
-require github.com/go-authn/ldap v0.11.2
+require github.com/go-authn/ldap v0.11.4
 
 require golang.org/x/text v0.43.0 // indirect
 
