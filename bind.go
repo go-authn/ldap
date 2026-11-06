@@ -28,6 +28,10 @@ func (c *conn) bind(ctx context.Context, m *message, log *slog.Logger) {
 	// invalidCredentials and carries on. That is the defect this server
 	// exists partly to not have.
 	c.setBoundDN("")
+	// The same section: "authentication state ... is discarded", and a paged
+	// search is part of it. One begun by the previous person must not go on
+	// delivering to the anonymous association.
+	c.pages.closeAll()
 
 	req, err := decodeBindRequest(m.op)
 	if err != nil {

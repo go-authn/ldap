@@ -641,7 +641,10 @@ truncates cannot tell that from a directory with fewer people in it. The
 handler is left RUNNING between pages, parked on its next entry, which is
 what keeps the result consistent: re-running the search per page and skipping
 the first N is not only O(n²), it sends an entry twice or never when somebody
-is added between two pages.
+is added between two pages. A **bind abandons every paged search in progress**
+(RFC 4511 §4.2.1: the authentication state is discarded when the bind is
+received), so a search begun by one person never goes on delivering to the
+connection once it is anonymous or somebody else's.
 
 **The read entry controls** (RFC 4527) are here too: a write can report the
 entry as it was before and as it became. They are answered by the HANDLER,
