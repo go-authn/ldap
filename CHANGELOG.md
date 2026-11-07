@@ -3,6 +3,19 @@
 Releases follow [semantic versioning](https://semver.org). Releases before
 v0.11.0 are described on the repository's GitHub releases page.
 
+## v0.12.2
+
+- `schema`: the duplicate-value check of `Validate` no longer compares every
+  pair of values of an attribute (each pair parsed and prepared both DNs again).
+  A value of a type whose EQUALITY rule is "prepare, then compare", or
+  distinguishedNameMatch over such types, gets a key once and is looked up;
+  anything else is compared pair by pair as before. The answer is the same
+  (checked against the pairwise reference on random lists). A `groupOfNames`
+  of 50 `member` DNs: 14,907 allocations and 959 KB per `Validate` before, 1,065
+  and 68 KB now (`BenchmarkValidateGroupOf50DNs`, exact counts). Found by
+  profiling a 10,000-people, 2,000-groups refresh in authnd
+  (go-authn/directory#42): 24 % of its allocations were this check.
+
 ## v0.12.0
 
 Resource bounds for the server (go-authn/authnd#67). All additions; the zero

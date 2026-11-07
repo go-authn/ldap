@@ -5,6 +5,8 @@ package schema
 import (
 	"encoding/hex"
 	"errors"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -195,6 +197,78 @@ func (s *Schema) matchDN(a, b []byte) Truth {
 		}
 	}
 	return result
+}
+
+// equalityKey is a key such that two values of t are equal by t's EQUALITY
+// rule (Equal is True) exactly when their keys are equal, so that a list can
+// be checked for duplicates in one pass instead of comparing every pair and
+// preparing both values each time. ok=false means no such key exists for this
+// value (no rule, a rule that is not "prepare, then compare", an unparsable
+// value, an unknown AVA type): the caller falls back to Equal.
+func (s *Schema) equalityKey(t *AttributeType, v []byte) (string, bool) {
+	if t.equality == nil {
+		return "", false
+	}
+	impl, ok := rules[t.equality.OID]
+	if !ok || impl.kind != equality {
+		return "", false
+	}
+	if impl.custom != nil {
+		if t.equality.OID == "2.5.13.1" {
+			return s.dnKey(v)
+		}
+		return "", false
+	}
+	if impl.compare != nil {
+		return "", false
+	}
+	return impl.key(s, v, whole)
+}
+
+// dnKey is the key of distinguishedNameMatch: for each RDN its AVAs in the
+// order of their types, each as the type and the key of its value under that
+// type's rule. It is only given for the DNs matchDN answers True or False for
+// by comparing such keys.
+func (s *Schema) dnKey(v []byte) (string, bool) {
+	rdns, err := parseDN(string(v))
+	if err != nil {
+		return "", false
+	}
+	var b strings.Builder
+	type part struct{ oid, key string }
+	for _, rdn := range rdns {
+		parts := make([]part, 0, len(rdn))
+		for _, x := range rdn {
+			tx := s.AttributeType(x.typ)
+			if tx == nil || tx.equality == nil {
+				return "", false
+			}
+			impl, ok := rules[tx.equality.OID]
+			if !ok || impl.kind != equality || impl.custom != nil || impl.compare != nil {
+				return "", false
+			}
+			k, ok := impl.key(s, x.value, whole)
+			if !ok {
+				return "", false
+			}
+			parts = append(parts, part{tx.OID, k})
+		}
+		slices.SortFunc(parts, func(a, b part) int { return strings.Compare(a.oid, b.oid) })
+		for i, p := range parts {
+			if i > 0 && parts[i-1].oid == p.oid {
+				return "", false // matchRDN answers Undefined
+			}
+			// length-prefixed, so that no two lists of AVAs share a key
+			b.WriteString(strconv.Itoa(len(p.oid)))
+			b.WriteByte(':')
+			b.WriteString(p.oid)
+			b.WriteString(strconv.Itoa(len(p.key)))
+			b.WriteByte(':')
+			b.WriteString(p.key)
+		}
+		b.WriteByte(',')
+	}
+	return b.String(), true
 }
 
 // matchRDN compares two RDNs: the same number of AVAs, and each AVA of one
