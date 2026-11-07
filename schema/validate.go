@@ -370,20 +370,37 @@ func (v *validation) attributes(e Entry) {
 		if precluded[d.t] {
 			v.add(Precluded, a.Description, v.rule.Name(), "%s is precluded by the DIT content rule %s (RFC 4512 4.1.6)", name, v.rule.Name())
 		}
+		// Duplicates by the EQUALITY rule: a value with an equalityKey is
+		// looked up among the keys seen (one preparation per value, not one
+		// per pair); a value without one, and the earlier values without one,
+		// are compared pair by pair as before.
+		seen := map[string]struct{}{}
+		var unkeyed [][]byte // earlier values that have no key
 		for i, val := range a.Values {
 			if !s.ValidValue(d.t, val) {
 				v.add(InvalidValue, a.Description, "", "the value %q of %s is not of its syntax %s", val, name, d.t.syntax)
 				continue
 			}
-			for _, other := range a.Values[:i] {
-				same := string(val) == string(other)
-				if d.t.equality != nil {
-					same = s.Equal(d.t, val, other) == True
-				}
-				if same {
-					v.add(DuplicateValue, a.Description, "", "%s has the value %q twice, or two values that are equal by its EQUALITY rule (RFC 4512 2.2)", name, val)
+			others := a.Values[:i]
+			dup := false
+			if key, ok := s.equalityKey(d.t, val); ok {
+				_, dup = seen[key]
+				seen[key] = struct{}{}
+				others = unkeyed
+			} else {
+				unkeyed = append(unkeyed, val)
+			}
+			for _, other := range others {
+				if dup {
 					break
 				}
+				dup = string(val) == string(other)
+				if d.t.equality != nil {
+					dup = s.Equal(d.t, val, other) == True
+				}
+			}
+			if dup {
+				v.add(DuplicateValue, a.Description, "", "%s has the value %q twice, or two values that are equal by its EQUALITY rule (RFC 4512 2.2)", name, val)
 			}
 		}
 	}
