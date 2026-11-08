@@ -230,6 +230,113 @@ func (s *Schema) equalityKey(t *AttributeType, v []byte) (string, bool) {
 // type's rule. It is only given for the DNs matchDN answers True or False for
 // by comparing such keys.
 func (s *Schema) dnKey(v []byte) (string, bool) {
+	if k, ok := s.dnKeyPlain(v); ok {
+		return k, true
+	}
+	return s.dnKeyParsed(v)
+}
+
+// plainStringRules are the equality rules of the string kinds whose key is
+// prepare(value, fold, insignificantSpace, whole): the OID of the rule and
+// whether it folds case (match.go ruleTable). TestPlainRulesAreTheTable keeps
+// this in step with that table.
+var plainStringRules = map[string]bool{
+	"2.5.13.2":                   true,  // caseIgnoreMatch
+	"2.5.13.5":                   false, // caseExactMatch
+	"1.3.6.1.4.1.1466.109.114.1": false, // caseExactIA5Match
+	"1.3.6.1.4.1.1466.109.114.2": true,  // caseIgnoreIA5Match
+}
+
+// dnKeyPlain is dnKeyParsed for the DNs that are nearly all of them: each RDN
+// one AVA, `type=value` with a keystring type and a value of printable ASCII
+// with no escape, no `+ ; # < > " =`, and no space at either end, the type
+// naming a string rule of plainStringRules. It writes the same key straight
+// from the bytes, with one allocation, instead of parsing. ok=false for
+// anything else, and the caller takes the full parse; the key is never
+// different from the full parse's (FuzzDNKeyPlain, with dnKeyParsed as the
+// oracle).
+func (s *Schema) dnKeyPlain(v []byte) (string, bool) {
+	var buf [192]byte
+	out := buf[:0]
+	for i := 0; i < len(v); {
+		start := i
+		for i < len(v) && (isAlnumASCII(v[i]) || (v[i] == '-' && i > start)) {
+			i++
+		}
+		if i == start || i == len(v) || v[i] != '=' || !isAlphaASCII(v[start]) {
+			return "", false
+		}
+		typ := v[start:i]
+		i++
+		vstart := i
+		for i < len(v) && v[i] != ',' {
+			c := v[i]
+			if c < 0x20 || c > 0x7e || c == '\\' || c == '"' || c == '+' || c == ';' || c == '#' || c == '<' || c == '>' || c == '=' {
+				return "", false
+			}
+			i++
+		}
+		val := v[vstart:i]
+		if len(val) == 0 || val[0] == ' ' || val[len(val)-1] == ' ' {
+			return "", false
+		}
+		if i < len(v) { // a ',': another RDN must follow
+			i++
+			if i == len(v) {
+				return "", false
+			}
+		}
+		tx := s.AttributeType(string(typ))
+		if tx == nil || tx.equality == nil || !isOID(string(typ)) {
+			return "", false
+		}
+		fold, ok := plainStringRules[tx.equality.OID]
+		if !ok {
+			return "", false
+		}
+		// the key of the value: " " + the value with each run of spaces as
+		// two + " " (prepare, whole, insignificantSpace), length first.
+		keyLen := 2
+		for j := 0; j < len(val); {
+			if val[j] == ' ' {
+				for j < len(val) && val[j] == ' ' {
+					j++
+				}
+				keyLen += 2
+				continue
+			}
+			keyLen++
+			j++
+		}
+		out = strconv.AppendInt(out, int64(len(tx.OID)), 10)
+		out = append(out, ':')
+		out = append(out, tx.OID...)
+		out = strconv.AppendInt(out, int64(keyLen), 10)
+		out = append(out, ':', ' ')
+		for j := 0; j < len(val); {
+			if val[j] == ' ' {
+				for j < len(val) && val[j] == ' ' {
+					j++
+				}
+				out = append(out, ' ', ' ')
+				continue
+			}
+			c := val[j]
+			if fold && c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			out = append(out, c)
+			j++
+		}
+		out = append(out, ' ', ',')
+	}
+	return string(out), true
+}
+
+func isAlphaASCII(c byte) bool { return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' }
+func isAlnumASCII(c byte) bool { return isAlphaASCII(c) || '0' <= c && c <= '9' }
+
+func (s *Schema) dnKeyParsed(v []byte) (string, bool) {
 	rdns, err := parseDN(string(v))
 	if err != nil {
 		return "", false
