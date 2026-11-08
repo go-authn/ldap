@@ -3,6 +3,19 @@
 Releases follow [semantic versioning](https://semver.org). Releases before
 v0.11.0 are described on the repository's GitHub releases page.
 
+## v0.12.3
+
+- `schema`: the key of a plain DN is written straight from its bytes. A DN whose
+  RDNs are each one `type=value` (a keystring type naming a string rule, a value
+  of printable ASCII with no escape, `+ ; # < > " =` or space at either end)
+  gets its duplicate-check key with one allocation instead of 17; anything else
+  takes the full parse, as before. `FuzzDNKeyPlain` (39 M executions, seeds
+  committed) and a 200,000-DN differential test hold the plain key to the
+  parsed one, byte for byte. `uid=,ou=,dc=,dc=`: 17 -> 1 allocations
+  (`BenchmarkDNKey`); a `groupOfNames` of 50 `member` DNs, `Validate`: 1,065 ->
+  265 allocations (`BenchmarkValidateGroupOf50DNs`, exact counts).
+  go-authn/directory#42.
+
 ## v0.12.2
 
 - `schema`: the duplicate-value check of `Validate` no longer compares every
