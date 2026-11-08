@@ -6,7 +6,7 @@ require (
 	github.com/go-asn1-ber/asn1-ber v1.5.8
 	github.com/hashicorp/hcl/v2 v2.25.0
 	github.com/spf13/cobra v1.10.2
-	github.com/zclconf/go-cty v1.19.0
+	github.com/zclconf/go-cty v1.20.0
 	golang.org/x/text v0.43.0
 )
 
