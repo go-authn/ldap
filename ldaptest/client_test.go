@@ -311,7 +311,17 @@ func TestWhatTheClientRefuses(t *testing.T) {
 	if _, err := c.Search(ldaptest.Search{Filter: "(not a filter"}); err == nil {
 		t.Error("a filter that does not parse was sent")
 	}
-	if _, err := ldaptest.Dial("127.0.0.1:1", 500*time.Millisecond); err == nil {
+	// ⛔ A port nobody listens on is made, not assumed: a hard-coded 127.0.0.1:1
+	// is a port a CI runner may have a service on (windows-latest accepted a
+	// dial to it once, go-authn/ldap#46). Bind port 0, keep the number the kernel
+	// chose, release it, and dial that.
+	gone, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := gone.Addr().String()
+	gone.Close()
+	if _, err := ldaptest.Dial(closed, 500*time.Millisecond); err == nil {
 		t.Error("a dial to a closed port succeeded")
 	}
 	// After the connection is closed, every operation reports it rather than
