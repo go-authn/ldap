@@ -3,6 +3,18 @@
 Releases follow [semantic versioning](https://semver.org). Releases before
 v0.11.0 are described on the repository's GitHub releases page.
 
+## v0.13.0
+
+- **A client.** `Dial` / `NewClientConn`, `ClientConn.Bind`, `StartTLS` and
+  `Search` (RFC 4511 §4.2, §4.14, §4.5; RFC 4513 §5.1.3; paged results, RFC
+  2696). It reads a message into one reusable buffer and decodes it in two
+  passes straight into `Entry`, with no tree of packets: about six allocations
+  per entry whatever its size, where a general client library spent 740 on one
+  entry of 50 values. Everything a server controls is bounded (`ClientLimits`:
+  message, entries, bytes, pages; a read deadline per message; the paging
+  cookie), an empty password is `ErrEmptyPassword` (an unauthenticated bind),
+  and `FuzzClientSearch` feeds it hostile servers. For go-authn/directory#42.
+
 ## v0.12.3
 
 - `schema`: the key of a plain DN is written straight from its bytes. A DN whose
