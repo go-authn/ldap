@@ -618,6 +618,31 @@ needs the Unicode decomposition and composition tables, and x/text is where
 the Go project keeps them: pure Go, no dependencies of its own, and already
 in authnd's module graph at the same version.
 
+## A client for reading a directory (since v0.13.0)
+
+```go
+c, err := ldap.Dial(ctx, "ldaps://ldap.example.org", ldap.DialOptions{})
+if err != nil { ... }
+defer c.Close()
+if err := c.Bind("cn=reader,dc=example,dc=org", password); err != nil { ... }
+f, _ := ldap.ParseFilter("(objectClass=posixAccount)")
+entries, err := c.Search(&ldap.SearchRequest{
+    BaseObject: "dc=example,dc=org", Scope: ldap.ScopeWholeSubtree,
+    Filter: f, Attributes: []string{"uid"},
+}, 500) // pages of 500 (RFC 2696); 0 sends no paging control
+```
+
+`Bind` (simple, RFC 4513 §5.1.3; an empty password is `ErrEmptyPassword`, not an
+unauthenticated bind), `StartTLS` (RFC 4511 §4.14) and `Search`. A message is
+read into one reusable buffer and decoded in two passes straight into `Entry`:
+about six allocations per entry, whatever its size (`TestClientAllocationsPerEntryAreFew`).
+What a server can make the client hold is bounded by `ClientLimits` (message
+size, entries, bytes kept, pages), by a read deadline per message and by a
+cap on the paging cookie; `FuzzClientSearch` feeds it hostile servers. A search
+the server refuses is an `*Error` and no partial result: an incomplete read of a
+directory is not a smaller directory. References are skipped, and nothing but
+bind, StartTLS and search is sent.
+
 ## Status
 
 The server answers binds (simple and SASL), searches, compares, extended
