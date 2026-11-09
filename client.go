@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	ber "github.com/go-asn1-ber/asn1-ber"
@@ -32,6 +33,7 @@ import (
 // use, except Close, which may be called from any goroutine and is how an
 // operation is cancelled: the read in progress then fails.
 type ClientConn struct {
+	mu      sync.Mutex // guards nc against Close from another goroutine
 	nc      net.Conn
 	br      *bufio.Reader
 	buf     []byte
@@ -177,13 +179,16 @@ func NewClientConn(nc net.Conn, o DialOptions) *ClientConn {
 // Close sends an unbind (RFC 4511 4.3), best effort, and closes the
 // connection.
 func (c *ClientConn) Close() error {
+	c.mu.Lock()
+	nc := c.nc
+	c.mu.Unlock()
 	unbind := ber.Encode(ber.ClassApplication, ber.TypePrimitive, 2, nil, "UnbindRequest") // [APPLICATION 2] NULL
 	m := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "LDAPMessage")
-	m.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, int64(c.nextID()), "messageID"))
+	m.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, 1<<30, "messageID")) // never an id of an operation
 	m.AppendChild(unbind)
-	c.nc.SetWriteDeadline(time.Now().Add(time.Second))
-	c.nc.Write(m.Bytes())
-	return c.nc.Close()
+	nc.SetWriteDeadline(time.Now().Add(time.Second))
+	nc.Write(m.Bytes())
+	return nc.Close()
 }
 
 func (c *ClientConn) nextID() int {
@@ -348,7 +353,10 @@ func (c *ClientConn) StartTLS(cfg *tls.Config) error {
 	if err != nil {
 		return fmt.Errorf("ldap: StartTLS: %w", err)
 	}
-	c.nc, c.br, c.secured = tc, bufio.NewReaderSize(tc, 32<<10), true
+	c.mu.Lock()
+	c.nc = tc
+	c.mu.Unlock()
+	c.br, c.secured = bufio.NewReaderSize(tc, 32<<10), true
 	return nil
 }
 
