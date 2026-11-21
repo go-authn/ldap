@@ -3,6 +3,32 @@
 Releases follow [semantic versioning](https://semver.org). Releases before
 v0.11.0 are described on the repository's GitHub releases page.
 
+## v0.14.0
+
+Security fixes to the client (2026-11-21 audit), and one addition.
+
+- `schema.Schema.EqualityKey`: a key such that two values of an attribute type
+  have one key exactly when `Equal` is True, so a caller can find duplicates by
+  the type's equality rule in one pass with a map. go-authn/directory uses it
+  to tell two entries with one uid apart as `caseIgnoreMatch` does.
+
+- **`StartTLS` verifies the host of the URL.** It verified the certificate
+  against the peer's IP address taken from `RemoteAddr`, not the name the URL
+  was written with (`ldaps://` was right): a certificate valid for the address
+  only, or an attacker who controls the name resolution, passed. `Dial` now
+  keeps the URL's host and `StartTLS` names it (an explicit
+  `tls.Config.ServerName` still wins). A `ClientConn` made by `NewClientConn`
+  has no URL and keeps verifying the peer address.
+- **The TLS handshake is bounded.** The `ldaps://` handshake ran under the
+  caller's context, so a server that accepted and never spoke held `Dial` for
+  ever under `context.Background()`. It now lasts at most the dialer's timeout
+  (30 s by default) and never more than `DialOptions.Timeout`; `StartTLS` the
+  same.
+- **Search references are counted.** Continuation references and intermediate
+  responses were skipped without limit, each resetting the read deadline: a
+  server could keep a search reading for ever. They now count against
+  `ClientLimits.MaxEntries` for the search.
+
 ## v0.13.0
 
 - **A client.** `Dial` / `NewClientConn`, `ClientConn.Bind`, `StartTLS` and
