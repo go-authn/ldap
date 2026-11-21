@@ -3,9 +3,14 @@
 Releases follow [semantic versioning](https://semver.org). Releases before
 v0.11.0 are described on the repository's GitHub releases page.
 
-## v0.13.1
+## v0.14.0
 
-Security fixes to the client (2026-11-21 audit).
+Security fixes to the client (2026-11-21 audit), and one addition.
+
+- `schema.Schema.EqualityKey`: a key such that two values of an attribute type
+  have one key exactly when `Equal` is True, so a caller can find duplicates by
+  the type's equality rule in one pass with a map. go-authn/directory uses it
+  to tell two entries with one uid apart as `caseIgnoreMatch` does.
 
 - **`StartTLS` verifies the host of the URL.** It verified the certificate
   against the peer's IP address taken from `RemoteAddr`, not the name the URL
