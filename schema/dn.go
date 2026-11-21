@@ -225,6 +225,20 @@ func (s *Schema) equalityKey(t *AttributeType, v []byte) (string, bool) {
 	return impl.key(s, v, whole)
 }
 
+// EqualityKey is a key such that two values of t are equal by t's EQUALITY rule
+// ([Schema.Equal] is True) exactly when their keys are equal: a list can be
+// checked for duplicates in one pass, with a map, instead of comparing every
+// pair. ok is false when no such key exists for this value (t has no equality
+// rule, the rule is not "prepare, then compare", or the value is not valid for
+// it); the caller then has only [Schema.Equal]. Keys of different attribute
+// types are not comparable with each other.
+func (s *Schema) EqualityKey(t *AttributeType, v []byte) (key string, ok bool) {
+	if t == nil {
+		return "", false
+	}
+	return s.equalityKey(t, v)
+}
+
 // dnKey is the key of distinguishedNameMatch: for each RDN its AVAs in the
 // order of their types, each as the type and the key of its value under that
 // type's rule. It is only given for the DNs matchDN answers True or False for
