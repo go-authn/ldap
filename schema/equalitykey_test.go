@@ -30,9 +30,16 @@ func TestEqualityKeyAgreesWithEqual(t *testing.T) {
 
 func TestEqualityKeyHasNoKeyWhereThereIsNoRule(t *testing.T) {
 	std := Standard()
-	if _, ok := std.EqualityKey(nil, []byte("x")); ok {
-		t.Error("a nil attribute type has a key")
-	}
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("a nil attribute type panics: %v", r)
+			}
+		}()
+		if _, ok := std.EqualityKey(nil, []byte("x")); ok {
+			t.Error("a nil attribute type has a key")
+		}
+	}()
 	for _, at := range std.AttributeTypes() {
 		if at.equality == nil {
 			if _, ok := std.EqualityKey(at, []byte("x")); ok {
