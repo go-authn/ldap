@@ -41,6 +41,7 @@ type ClientConn struct {
 	names   map[string]string // attribute descriptions seen, so each is one string
 	o       DialOptions
 	secured bool
+	host    string // the host of the URL Dial was given: what StartTLS verifies
 }
 
 // ClientLimits bound what a server can make a client hold. A zero field is its
@@ -125,6 +126,7 @@ func Dial(ctx context.Context, rawurl string, o DialOptions) (*ClientConn, error
 	}
 	var nc net.Conn
 	secured := false
+	dialedHost := ""
 	switch u.Scheme {
 	case "ldap", "ldaps":
 		host, port := u.Hostname(), u.Port()
@@ -137,9 +139,10 @@ func Dial(ctx context.Context, rawurl string, o DialOptions) (*ClientConn, error
 		if host == "" {
 			host = "localhost"
 		}
+		dialedHost = host
 		nc, err = d.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
 		if err == nil && u.Scheme == "ldaps" {
-			nc, err = handshake(ctx, nc, o.TLS, host)
+			nc, err = handshake(ctx, nc, o.TLS, host, handshakeBound(d, o))
 			secured = err == nil
 		}
 	default:
@@ -150,11 +153,29 @@ func Dial(ctx context.Context, rawurl string, o DialOptions) (*ClientConn, error
 	}
 	c := NewClientConn(nc, o)
 	c.secured = secured
+	c.host = dialedHost
 	return c, nil
 }
 
-// handshake runs TLS on nc, naming host when the configuration names none.
-func handshake(ctx context.Context, nc net.Conn, cfg *tls.Config, host string) (net.Conn, error) {
+// handshakeBound is how long a TLS handshake may take whatever the context
+// says: the dialer's timeout, or 30 seconds, and never more than the
+// per-message Timeout when one is set.
+func handshakeBound(d *net.Dialer, o DialOptions) time.Duration {
+	b := 30 * time.Second
+	if d != nil && d.Timeout > 0 {
+		b = d.Timeout
+	}
+	if o.Timeout > 0 && o.Timeout < b {
+		b = o.Timeout
+	}
+	return b
+}
+
+// handshake runs TLS on nc, naming host when the configuration names none. The
+// handshake is bounded by bound, a context without a deadline notwithstanding.
+func handshake(ctx context.Context, nc net.Conn, cfg *tls.Config, host string, bound time.Duration) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(ctx, bound)
+	defer cancel()
 	if cfg == nil {
 		cfg = &tls.Config{MinVersion: tls.VersionTLS12}
 	} else {
@@ -342,14 +363,16 @@ func (c *ClientConn) StartTLS(cfg *tls.Config) error {
 	if r, _ := readResult(m.body); r.Code != Success {
 		return &Error{Result: r}
 	}
-	host, _, err := net.SplitHostPort(c.nc.RemoteAddr().String())
-	if err != nil {
-		host = ""
+	host := c.host
+	if host == "" {
+		// A ClientConn that NewClientConn made on a net.Conn of the caller's:
+		// there is no URL, so the address the caller dialed is all there is.
+		host, _, _ = net.SplitHostPort(c.nc.RemoteAddr().String())
 	}
 	if c.br.Buffered() != 0 {
 		return errors.New("ldap: the server sent data before the TLS handshake")
 	}
-	tc, err := handshake(context.Background(), c.nc, cfg, host)
+	tc, err := handshake(context.Background(), c.nc, cfg, host, handshakeBound(c.o.Dialer, c.o))
 	if err != nil {
 		return fmt.Errorf("ldap: StartTLS: %w", err)
 	}
@@ -437,6 +460,7 @@ func (c *ClientConn) Search(req *SearchRequest, pageSize int) ([]*Entry, error) 
 // the paging cookie of its result.
 func (c *ClientConn) collect(id int, out *[]*Entry, cost *int) (cookie []byte, done bool, err error) {
 	lim := c.o.Limits
+	skipped := 0
 	for {
 		m, err := c.await(id)
 		if err != nil {
@@ -458,6 +482,11 @@ func (c *ClientConn) collect(id int, out *[]*Entry, cost *int) (cookie []byte, d
 		case opSearchRef, opIntermediate:
 			// A continuation reference names another server; a directory read
 			// does not follow it. An intermediate response is not asked for.
+			// Each is skipped, but counted: a server must not keep the read
+			// (and its deadline, reset per message) alive for ever.
+			if skipped++; skipped > lim.entries() {
+				return nil, false, fmt.Errorf("ldap: more than %d references in the answer to a search", lim.entries())
+			}
 		case opSearchDone:
 			r, _ := readResult(m.body)
 			if r.Code != Success {
