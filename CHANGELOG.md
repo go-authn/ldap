@@ -3,6 +3,18 @@
 Releases follow [semantic versioning](https://semver.org). Releases before
 v0.11.0 are described on the repository's GitHub releases page.
 
+## v0.15.0
+
+Security audit 2026-11-21.
+
+- The server answers a simple bind with a name and an empty password itself,
+  with unwillingToPerform, and never asks the `Binder` (RFC 4513 5.1.2: the
+  unauthenticated mechanism, which servers SHOULD fail by default, and whose
+  name must not be used for authorization). Before, a `Binder` that answered
+  Success to it bound the connection as that name. The anonymous bind (no name,
+  no password) and a bind with a password are unchanged. Breaking for a
+  deployment that relied on its `Binder` to accept unauthenticated binds.
+
 ## v0.14.0
 
 Security fixes to the client (2026-11-21 audit), and one addition.
