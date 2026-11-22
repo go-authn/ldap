@@ -204,6 +204,13 @@ func (v *refValidation) attributes(e Entry) {
 				continue
 			}
 			for _, other := range a.Values[:i] {
+				// RFC 4512 2.2: values conform to the attribute's syntax and the
+				// matching rules compare such values; an earlier value that is not
+				// of the syntax (already an InvalidValue) is not one to compare
+				// against (go-authn/ldap#51).
+				if !s.ValidValue(d.t, other) {
+					continue
+				}
 				same := string(val) == string(other)
 				if d.t.equality != nil {
 					same = s.Equal(d.t, val, other) == True
