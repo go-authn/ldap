@@ -142,6 +142,17 @@ func TestEachProblemIsNamed(t *testing.T) {
 	}
 }
 
+// RFC 4512 2.2 / RFC 4511 4.1.7: only values of the attribute's syntax are
+// compared, so an invalid "" is reported as InvalidValue and is not "equal"
+// to a later " " (go-authn/ldap#51).
+func TestInvalidValueIsNotComparedForDuplicates(t *testing.T) {
+	e := Entry{DN: "cn=a", Attributes: []Attribute{{Description: "uid", Values: [][]byte{{}, {0x20}}}}}
+	ve := problems(t, Standard().Validate(e))
+	if !ve.Has(InvalidValue) || ve.Has(DuplicateValue) {
+		t.Errorf("got %v, want InvalidValue and no DuplicateValue", ve)
+	}
+}
+
 // Every syntax checked, with one good value and one bad.
 func TestSyntaxChecks(t *testing.T) {
 	s := Standard()
