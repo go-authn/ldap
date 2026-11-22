@@ -57,6 +57,19 @@ func (c *conn) bind(ctx context.Context, m *message, log *slog.Logger) {
 			"this server does not answer simple binds")}))
 		return
 	}
+	// ⛔ RFC 4513 5.1.2: a name with a zero-length password is the
+	// UNAUTHENTICATED mechanism. The name is for logging only, "not to be used
+	// (directly or indirectly) for authorization", and servers "SHOULD by
+	// default fail" it with unwillingToPerform. Answered here, before the
+	// handler, because the alternative is trusting every Binder to remember:
+	// one that treats an empty password as "nothing to compare" would answer
+	// Success, and the line below would bind the connection as that name.
+	// (5.1.1, no name and no password, is the anonymous bind and goes on.)
+	if req.Name != "" && len(req.Simple) == 0 {
+		c.send(bindResponse(m.id, SASLResult{Result: Refuse(UnwillingToPerform,
+			"a name with an empty password is an unauthenticated bind, which this server refuses (RFC 4513 5.1.2)")}))
+		return
+	}
 	r, err := c.srv.Bind.Bind(ctx, c, req)
 	if pastDeadline(ctx, err) {
 		c.send(bindResponse(m.id, SASLResult{Result: Result{Code: TimeLimitExceeded}}))
