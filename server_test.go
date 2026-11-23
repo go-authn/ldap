@@ -257,7 +257,8 @@ func TestTheTwoEmptyPasswordBinds(t *testing.T) {
 	r := serve(t, &Server{Bind: reader(), Search: &directory{entries: people("alice")}})
 
 	named, _ := runBind(t, bin, r, "cn=reader,dc=example,dc=org", "")
-	if !strings.Contains(named, "Invalid credentials") {
+	// unwillingToPerform is RFC 4513 5.1.2's own word, answered by the library.
+	if !strings.Contains(named, "unwilling to perform") {
 		t.Errorf("a NAME with an empty password was not refused:\n%s", named)
 	}
 	anonymous, _ := runBind(t, bin, r, "", "")
